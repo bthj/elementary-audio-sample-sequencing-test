@@ -47,7 +47,7 @@ class TestComponent extends HTMLElement {
                 el.const({ key: `${voiceKey}-trigger`, value: 1 }),
                 1
             ),
-            0.5 // Output gain
+            el.const({ value: 1 / this.maxVoices }) // Dynamic gain scaling
         );
     }
 
@@ -65,28 +65,33 @@ class TestComponent extends HTMLElement {
                 duration: duration,
                 seq: [{ time: 0, value: 1 }]
             }, time),
-            0.5 // Output gain
+            el.const({ value: 1 / this.maxVoices }) // Dynamic gain scaling
         );
     }
 
     updateAudioGraph() {
+        let signal;
+
         if (this.mode === 'explore looping') {
             // For looping mode, sum all active looping voices
             if (this.loopingVoices.size > 0) {
                 const voices = Array.from(this.loopingVoices.values());
-                this.core.render(el.add(...voices));
+                signal = el.add(...voices);
             } else {
-                this.core.render(el.const({value: 0})); // Silence
+                signal = el.const({value: 0}); // Silence
             }
         } else if (this.mode === 'explore one-off') {
             // For one-off mode, sum all active voices
             if (this.activeVoices.size > 0) {
                 const voices = Array.from(this.activeVoices.values());
-                this.core.render(voices.length === 1 ? voices[0] : el.add(...voices));
+                signal = voices.length === 1 ? voices[0] : el.add(...voices);
             } else {
-                this.core.render(el.const({value: 0})); // Silence
+                signal = el.const({value: 0}); // Silence
             }
         }
+
+        // Render the same signal to both channels for proper stereo
+        this.core.render(signal, signal);
     }
 
     async toggleLoopingSound(element) {
