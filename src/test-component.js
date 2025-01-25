@@ -14,6 +14,7 @@ class TestComponent extends HTMLElement {
         this.activeVoices = new Map(); // Track active one-off voices
         this.maxVoices = 4; // Maximum concurrent one-off voices
         this.mode = 'explore one-off';
+        this.interactionMode = 'hover'; // New interaction mode setting
     }
 
     async initializeAudio() {
@@ -195,17 +196,63 @@ class TestComponent extends HTMLElement {
                     margin-right: 10px;
                     padding: 8px 16px;
                 }
+                .control-panel {
+                    margin: 20px 0;
+                    display: flex;
+                    gap: 40px;
+                }
+                .control-group {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .control-group h3 {
+                    margin: 0;
+                }
+                .radio-group {
+                    display: flex;
+                    gap: 15px;
+                }
+                .radio-group label {
+                    display: flex;
+                    align-items: center;
+                    gap: 5px;
+                }
             </style>
             <div class="container">
                 <h1>Elementary Audio Test</h1>
                 <button id="init-audio">Initialize Audio</button>
-                <div class="mode-buttons">
-                    <button id="mode-one-off">Explore One-Off</button>
-                    <button id="mode-looping">Explore Looping</button>
-                    <button id="mode-trajectory">Trajectory</button>
-                    <button id="mode-sequence">Sequence</button>
+                
+                <div class="control-panel">
+                    <div class="control-group">
+                        <h3>Playback Mode</h3>
+                        <div class="radio-group">
+                            <label>
+                                <input type="radio" name="playback" value="explore one-off" checked>
+                                One-off
+                            </label>
+                            <label>
+                                <input type="radio" name="playback" value="explore looping">
+                                Looping
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <h3>Interaction Mode</h3>
+                        <div class="radio-group">
+                            <label>
+                                <input type="radio" name="interaction" value="hover" checked>
+                                Hover
+                            </label>
+                            <label>
+                                <input type="radio" name="interaction" value="click">
+                                Click
+                            </label>
+                        </div>
+                    </div>
                 </div>
-                <div id="current-mode">Current Mode: ${this.mode}</div>
+
                 <div id="content">
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCXDE8GYPBGY6579CNEVDESS-4_0_1.wav">Element 1</div>
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCXC5834FMVTRV3C6PZ1MH4E-4_0_1.wav">Element 2</div>
@@ -223,22 +270,40 @@ class TestComponent extends HTMLElement {
         });
 
         // Mode selection handlers
-        this.shadowRoot.querySelector('#mode-one-off').addEventListener('click', () => this.setMode('explore one-off'));
-        this.shadowRoot.querySelector('#mode-looping').addEventListener('click', () => this.setMode('explore looping'));
-        this.shadowRoot.querySelector('#mode-trajectory').addEventListener('click', () => this.setMode('trajectory'));
-        this.shadowRoot.querySelector('#mode-sequence').addEventListener('click', () => this.setMode('sequence'));
+        this.shadowRoot.querySelectorAll('input[name="playback"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                this.setMode(e.target.value);
+            });
+        });
+
+        // Interaction mode selection handlers
+        this.shadowRoot.querySelectorAll('input[name="interaction"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                this.interactionMode = e.target.value;
+            });
+        });
 
         // Sound element event handlers
         this.shadowRoot.querySelectorAll('.element').forEach(element => {
+            // Handler for hover interactions
             element.addEventListener('mouseenter', () => {
-                if (this.mode === 'explore one-off') {
-                    this.playOneOffSound(element);
+                if (this.interactionMode === 'hover') {
+                    if (this.mode === 'explore one-off') {
+                        this.playOneOffSound(element);
+                    } else if (this.mode === 'explore looping') {
+                        this.toggleLoopingSound(element);
+                    }
                 }
             });
 
+            // Handler for click interactions
             element.addEventListener('click', () => {
-                if (this.mode === 'explore looping') {
-                    this.toggleLoopingSound(element);
+                if (this.interactionMode === 'click') {
+                    if (this.mode === 'explore one-off') {
+                        this.playOneOffSound(element);
+                    } else if (this.mode === 'explore looping') {
+                        this.toggleLoopingSound(element);
+                    }
                 }
             });
         });
