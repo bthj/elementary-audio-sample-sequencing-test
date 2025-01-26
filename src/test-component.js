@@ -14,7 +14,13 @@ class TestComponent extends HTMLElement {
         this.activeVoices = new Map(); // Track active one-off voices
         this.maxVoices = 4; // Maximum concurrent one-off voices
         this.mode = 'explore one-off';
-        this.interactionMode = 'hover'; // New interaction mode setting
+        this.interactionMode = 'hover';
+        
+        // Trajectory recording state
+        this.isRecording = false;
+        this.recordingStartTime = null;
+        this.trajectoryEvents = [];
+        this.isPlayingTrajectory = false; // New interaction mode setting
     }
 
     async initializeAudio() {
@@ -199,6 +205,7 @@ class TestComponent extends HTMLElement {
                 .control-panel {
                     margin: 20px 0;
                     display: flex;
+                    flex-wrap: wrap;
                     gap: 40px;
                 }
                 .control-group {
@@ -217,6 +224,21 @@ class TestComponent extends HTMLElement {
                     display: flex;
                     align-items: center;
                     gap: 5px;
+                }
+                .trajectory-controls {
+                    display: flex;
+                    gap: 10px;
+                }
+                .trajectory-controls button {
+                    padding: 8px 16px;
+                    cursor: pointer;
+                }
+                .trajectory-controls button:disabled {
+                    opacity: 0.5;
+                    cursor: not-allowed;
+                }
+                .recording {
+                    background-color: #ff4444 !important;
                 }
             </style>
             <div class="container">
@@ -251,6 +273,15 @@ class TestComponent extends HTMLElement {
                             </label>
                         </div>
                     </div>
+
+                    <div class="control-group">
+                        <h3>Trajectory</h3>
+                        <div class="trajectory-controls">
+                            <button id="record-trajectory">Record Trajectory</button>
+                            <button id="stop-trajectory" disabled>Stop Recording</button>
+                            <button id="clear-trajectory" disabled>Clear Trajectory</button>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="content">
@@ -283,11 +314,45 @@ class TestComponent extends HTMLElement {
             });
         });
 
+        // Trajectory control handlers
+        const recordButton = this.shadowRoot.querySelector('#record-trajectory');
+        const stopButton = this.shadowRoot.querySelector('#stop-trajectory');
+        const clearButton = this.shadowRoot.querySelector('#clear-trajectory');
+
+        recordButton.addEventListener('click', () => {
+            this.startTrajectoryRecording();
+            recordButton.disabled = true;
+            stopButton.disabled = false;
+            clearButton.disabled = true;
+            this.shadowRoot.querySelectorAll('.element').forEach(el => 
+                el.classList.add('recording'));
+        });
+
+        stopButton.addEventListener('click', () => {
+            this.stopTrajectoryRecording();
+            recordButton.disabled = false;
+            stopButton.disabled = true;
+            clearButton.disabled = false;
+            this.shadowRoot.querySelectorAll('.element').forEach(el => 
+                el.classList.remove('recording'));
+        });
+
+        clearButton.addEventListener('click', () => {
+            this.clearTrajectory();
+            clearButton.disabled = true;
+        });
+
         // Sound element event handlers
         this.shadowRoot.querySelectorAll('.element').forEach(element => {
             // Handler for hover interactions
             element.addEventListener('mouseenter', () => {
-                if (this.interactionMode === 'hover') {
+                if (!this.initialized) return;
+
+                if (this.isRecording) {
+                    this.recordEvent(element);
+                }
+
+                if (this.interactionMode === 'hover' && !this.isPlayingTrajectory) {
                     if (this.mode === 'explore one-off') {
                         this.playOneOffSound(element);
                     } else if (this.mode === 'explore looping') {
@@ -298,7 +363,13 @@ class TestComponent extends HTMLElement {
 
             // Handler for click interactions
             element.addEventListener('click', () => {
-                if (this.interactionMode === 'click') {
+                if (!this.initialized) return;
+
+                if (this.isRecording) {
+                    this.recordEvent(element);
+                }
+
+                if (this.interactionMode === 'click' && !this.isPlayingTrajectory) {
                     if (this.mode === 'explore one-off') {
                         this.playOneOffSound(element);
                     } else if (this.mode === 'explore looping') {
@@ -318,8 +389,143 @@ class TestComponent extends HTMLElement {
         this.updateAudioGraph();
 
         this.mode = mode;
-        this.shadowRoot.querySelector('#current-mode').textContent = `Current Mode: ${this.mode}`;
     }
+
+    startTrajectoryRecording() {
+        this.isRecording = true;
+        this.trajectoryEvents = [];
+        this.recordingStartTime = null;
+        console.log('Started recording trajectory');
+    }
+
+    stopTrajectoryRecording() {
+        this.isRecording = false;
+        console.log('Stopped recording trajectory. Events:', this.trajectoryEvents);
+        if (this.trajectoryEvents.length > 0) {
+            this.playTrajectory();
+        }
+    }
+
+    clearTrajectory() {
+        this.trajectoryEvents = [];
+        this.isPlayingTrajectory = false;
+        this.updateAudioGraph(); // Reset to silence
+        console.log('Cleared trajectory');
+    }
+
+    recordEvent(element) {
+        const soundUrl = element.getAttribute('data-sound');
+        const currentTime = this.recordingStartTime === null ? 
+            0 : (Date.now() - this.recordingStartTime) / 1000; // Convert to seconds
+
+        if (this.recordingStartTime === null) {
+            this.recordingStartTime = Date.now();
+        }
+
+        this.trajectoryEvents.push({
+            time: currentTime,
+            soundUrl: soundUrl
+        });
+        console.log('Recorded event:', { time: currentTime, soundUrl });
+    }
+
+    async playTrajectory() {
+      if (this.trajectoryEvents.length === 0) return;
+      
+      this.isPlayingTrajectory = true;
+      
+      // First ensure all samples are loaded
+      const uniqueSounds = [...new Set(this.trajectoryEvents.map(evt => evt.soundUrl))];
+      for (const soundUrl of uniqueSounds) {
+          if (!this.uploadedSamples.has(soundUrl)) {
+              const res = await fetch(soundUrl);
+              const sampleBuffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
+              
+              await this.core.updateVirtualFileSystem({
+                  [soundUrl]: [sampleBuffer.getChannelData(0)]
+              });
+              
+              this.uploadedSamples.add(soundUrl);
+              this.sampleDurations.set(soundUrl, sampleBuffer.duration);
+          }
+      }
+  
+      // Create timing signal - must be an Elementary node
+      const ticker = el.train(100);  // 100Hz clock
+  
+      // Format and log sequence data
+      const seq = this.trajectoryEvents.map(evt => ({
+          tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
+          value: uniqueSounds.indexOf(evt.soundUrl) // Use sound index as value
+      }));
+      console.log('Sequence data:', seq);
+  
+      // Calculate loop points considering sample durations
+      const firstTick = seq[0].tickTime;
+      const lastTick = seq[seq.length - 1].tickTime;
+  
+      // For each event, calculate when its sample finishes playing
+      const endPoints = seq.map(event => {
+          const soundUrl = uniqueSounds[event.value];
+          const sampleDuration = this.sampleDurations.get(soundUrl);
+          // Convert sample duration to ticks (sample duration is in seconds)
+          const durationInTicks = Math.ceil(sampleDuration * 100); // 100Hz tick rate
+          return event.tickTime + durationInTicks;
+      });
+  
+      // Find the latest endpoint
+      const latestEndpoint = Math.max(...endPoints);
+      
+      // Create master sequence with loop points
+      const sequence = el.sparseq({
+          seq: seq,
+          loop: [firstTick, latestEndpoint]
+      }, ticker, el.const({value: 0}));
+  
+      console.log('Created sequence node:', sequence);
+  
+      // Debug sequence
+      console.log('Sequence:', sequence);
+  
+      // Create a player for each sound
+      const players = uniqueSounds.map((soundUrl, index) => {
+          console.log(`Creating player for sound ${index}:`, soundUrl);
+  
+          // Compare sequence value to this sound's index
+          const trigger = el.eq(sequence, el.const({value: index}));
+          console.log('Trigger node for index', index, ':', trigger);
+          
+          const player = el.sample({
+              path: soundUrl,
+              mode: 'trigger'
+          }, trigger, el.const({value: 1}));
+          console.log('Player node for index', index, ':', player);
+  
+          return player;
+      });
+  
+      console.log('All players:', players);
+  
+      // Mix all players with equal gain - try with explicit node creation
+      let signal;
+      if (players.length === 1) {
+          signal = el.mul(players[0], el.const({value: 1 / this.maxVoices}));
+      } else {
+          const mixed = el.add(...players);
+          console.log('Mixed signal:', mixed);
+          signal = el.mul(mixed, el.const({value: 1 / this.maxVoices}));
+      }
+  
+      console.log('Final signal:', signal);
+  
+      // Render the mixed signal to both channels
+      this.core.render(signal, signal);
+      
+      console.log('Playing trajectory:', {
+          uniqueSounds,
+          sampleDurations: Object.fromEntries([...this.sampleDurations])
+      });
+  }
 }
 
 customElements.define('test-component', TestComponent);
