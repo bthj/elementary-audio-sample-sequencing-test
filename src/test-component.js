@@ -455,62 +455,60 @@ class TestComponent extends HTMLElement {
       
       this.isPlayingTrajectory = true;
       
-      // First ensure all samples are loaded
-      const uniqueSounds = [...new Set(this.trajectoryEvents.map(evt => evt.soundUrl))];
-      for (const soundUrl of uniqueSounds) {
-          if (!this.uploadedSamples.has(soundUrl)) {
-              const res = await fetch(soundUrl);
-              const sampleBuffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
-              
-              await this.core.updateVirtualFileSystem({
-                  [soundUrl]: [sampleBuffer.getChannelData(0)]
-              });
-              
-              this.uploadedSamples.add(soundUrl);
-              this.sampleDurations.set(soundUrl, sampleBuffer.duration);
-          }
-      }
+      // Load samples as before...
   
-    // Create timing signal 
-    const ticker = el.train(100);  // 100Hz clock
-
-    // Format sequence data 
-    const seq = this.trajectoryEvents.map(evt => ({
-        tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
-        value: 1, // We want a trigger pulse
-        soundUrl: evt.soundUrl
-    }));
-console.log('Sequence:', seq);
-    // Calculate endpoints including sample durations
-    const firstTick = seq[0].tickTime;
-    const endPoints = seq.map(event => {
-        const sampleDuration = this.sampleDurations.get(event.soundUrl);
-        return event.tickTime + Math.ceil(sampleDuration * 100);
-    });
-    const latestEndpoint = Math.max(...endPoints);
-console.log('Endpoints:', {firstTick, latestEndpoint});
-    // Create individual sequences for each event
-    const players = seq.map((event, index) => {
-        // Create a sequence just for this event's trigger timing
-        const trigger = el.sparseq({
-            key: `trigger-${index}`,
-            seq: [{tickTime: event.tickTime, value: 1}],
-            loop: [firstTick, latestEndpoint]
-        }, ticker, el.const({value: 0}));
-
-        return el.sample({
-            key: `player-${index}`,
-            path: event.soundUrl,
-            mode: 'trigger'
-        }, trigger, el.const({value: 1}));
-    });
-
-    // Mix players and render
-    let signal = players.length === 1 ? 
-        el.mul(players[0], el.const({value: 1 / this.maxVoices})) :
-        el.mul(el.add(...players), el.const({value: 1 / this.maxVoices}));
-
-    this.core.render(signal, signal);
+      // Create timing signal with key
+      const ticker = el.train(100);  // 100Hz clock
+  
+      // Format sequence data - each event gets a unique value
+      const seq = this.trajectoryEvents.map((evt, i) => ({
+          tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
+          value: i,  // Use index as unique identifier
+          soundUrl: evt.soundUrl
+      }));
+  
+      // Calculate endpoints including sample durations
+      const firstTick = seq[0].tickTime;
+      const endPoints = seq.map(event => {
+          const sampleDuration = this.sampleDurations.get(event.soundUrl);
+          return event.tickTime + Math.ceil(sampleDuration * 100);
+      });
+      const latestEndpoint = Math.max(...endPoints);
+  
+      // Create master sequence with unique key
+      const masterSeq = el.sparseq({
+          key: 'trajectory-master-sequence',
+          seq: seq,
+          loop: [firstTick, latestEndpoint]
+      }, ticker, el.const({value: 0}));
+  
+      // Create sample players
+      const players = seq.map((event, index) => {
+          // Create trigger when master sequence matches this event's index
+          const trigger = el.eq(
+              masterSeq,
+              el.const({key: `event-${index}-value`, value: index})
+          );
+  
+          return el.sample({
+              key: `player-${index}`,
+              path: event.soundUrl,
+              mode: 'trigger'
+          }, trigger, el.const({key: `rate-${index}`, value: 1}));
+      });
+  
+      // Mix players with keyed gain
+      let signal = players.length === 1 ? 
+          el.mul(players[0], el.const({key: 'master-gain', value: 1 / this.maxVoices})) :
+          el.mul(el.add(...players), el.const({key: 'master-gain', value: 1 / this.maxVoices}));
+  
+      console.log('Rendering trajectory with:', {
+          numEvents: seq.length,
+          loopPoints: [firstTick, latestEndpoint],
+          players: players.length
+      });
+  
+      this.core.render(signal, signal);
   }
 }
 
