@@ -21,6 +21,8 @@ class TestComponent extends HTMLElement {
         this.recordingStartTime = null;
         this.trajectoryEvents = [];
         this.isPlayingTrajectory = false; // New interaction mode setting
+
+        this.voiceTimeouts = new Map(); // Track timeouts for cleanup
     }
 
     async initializeAudio() {
@@ -168,10 +170,13 @@ class TestComponent extends HTMLElement {
         this.updateAudioGraph();
 
         // Clean up this specific voice instance after duration
-        setTimeout(() => {
-            this.activeVoices.delete(voiceId);
-            this.updateAudioGraph();
+        const timeoutId = setTimeout(() => {
+          this.activeVoices.delete(voiceId);
+          this.voiceTimeouts.delete(voiceId);
+          this.updateAudioGraph();
         }, duration * 1000);
+        
+        this.voiceTimeouts.set(voiceId, timeoutId);
     }
 
     connectedCallback() {
@@ -399,11 +404,27 @@ class TestComponent extends HTMLElement {
     }
 
     stopTrajectoryRecording() {
-        this.isRecording = false;
-        console.log('Stopped recording trajectory. Events:', this.trajectoryEvents);
-        if (this.trajectoryEvents.length > 0) {
-            this.playTrajectory();
-        }
+      this.isRecording = false;
+
+      // Clear all active timeout callbacks
+      for (const timeoutId of this.voiceTimeouts.values()) {
+          clearTimeout(timeoutId);
+      }
+      this.voiceTimeouts.clear();
+
+      // Clear any playing sounds
+      this.activeVoices.clear();
+      this.loopingVoices.clear();
+      
+      // Update graph to silence
+      this.updateAudioGraph();
+
+      console.log('Stopped recording trajectory. Events:', this.trajectoryEvents);
+      if (this.trajectoryEvents.length > 0) {
+          setTimeout(() => {
+              this.playTrajectory();
+          }, 50);
+      }
     }
 
     clearTrajectory() {
@@ -450,81 +471,46 @@ class TestComponent extends HTMLElement {
           }
       }
   
-      // Create timing signal - must be an Elementary node
-      const ticker = el.train(100);  // 100Hz clock
-  
-      // Format and log sequence data
-      const seq = this.trajectoryEvents.map(evt => ({
-          tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
-          value: uniqueSounds.indexOf(evt.soundUrl) // Use sound index as value
-      }));
-      console.log('Sequence data:', seq);
-  
-      // Calculate loop points considering sample durations
-      const firstTick = seq[0].tickTime;
-      const lastTick = seq[seq.length - 1].tickTime;
-  
-      // For each event, calculate when its sample finishes playing
-      const endPoints = seq.map(event => {
-          const soundUrl = uniqueSounds[event.value];
-          const sampleDuration = this.sampleDurations.get(soundUrl);
-          // Convert sample duration to ticks (sample duration is in seconds)
-          const durationInTicks = Math.ceil(sampleDuration * 100); // 100Hz tick rate
-          return event.tickTime + durationInTicks;
-      });
-  
-      // Find the latest endpoint
-      const latestEndpoint = Math.max(...endPoints);
-      
-      // Create master sequence with loop points
-      const sequence = el.sparseq({
-          seq: seq,
-          loop: [firstTick, latestEndpoint]
-      }, ticker, el.const({value: 0}));
-  
-      console.log('Created sequence node:', sequence);
-  
-      // Debug sequence
-      console.log('Sequence:', sequence);
-  
-      // Create a player for each sound
-      const players = uniqueSounds.map((soundUrl, index) => {
-          console.log(`Creating player for sound ${index}:`, soundUrl);
-  
-          // Compare sequence value to this sound's index
-          const trigger = el.eq(sequence, el.const({value: index}));
-          console.log('Trigger node for index', index, ':', trigger);
-          
-          const player = el.sample({
-              path: soundUrl,
-              mode: 'trigger'
-          }, trigger, el.const({value: 1}));
-          console.log('Player node for index', index, ':', player);
-  
-          return player;
-      });
-  
-      console.log('All players:', players);
-  
-      // Mix all players with equal gain - try with explicit node creation
-      let signal;
-      if (players.length === 1) {
-          signal = el.mul(players[0], el.const({value: 1 / this.maxVoices}));
-      } else {
-          const mixed = el.add(...players);
-          console.log('Mixed signal:', mixed);
-          signal = el.mul(mixed, el.const({value: 1 / this.maxVoices}));
-      }
-  
-      console.log('Final signal:', signal);
-  
-      // Render the mixed signal to both channels
-      this.core.render(signal, signal);
-      
-      console.log('Playing trajectory:', {
-          uniqueSounds,
-          sampleDurations: Object.fromEntries([...this.sampleDurations])
-      });
+    // Create timing signal 
+    const ticker = el.train(100);  // 100Hz clock
+
+    // Format sequence data 
+    const seq = this.trajectoryEvents.map(evt => ({
+        tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
+        value: 1, // We want a trigger pulse
+        soundUrl: evt.soundUrl
+    }));
+console.log('Sequence:', seq);
+    // Calculate endpoints including sample durations
+    const firstTick = seq[0].tickTime;
+    const endPoints = seq.map(event => {
+        const sampleDuration = this.sampleDurations.get(event.soundUrl);
+        return event.tickTime + Math.ceil(sampleDuration * 100);
+    });
+    const latestEndpoint = Math.max(...endPoints);
+console.log('Endpoints:', {firstTick, latestEndpoint});
+    // Create individual sequences for each event
+    const players = seq.map((event, index) => {
+        // Create a sequence just for this event's trigger timing
+        const trigger = el.sparseq({
+            key: `trigger-${index}`,
+            seq: [{tickTime: event.tickTime, value: 1}],
+            loop: [firstTick, latestEndpoint]
+        }, ticker, el.const({value: 0}));
+
+        return el.sample({
+            key: `player-${index}`,
+            path: event.soundUrl,
+            mode: 'trigger'
+        }, trigger, el.const({value: 1}));
+    });
+
+    // Mix players and render
+    let signal = players.length === 1 ? 
+        el.mul(players[0], el.const({value: 1 / this.maxVoices})) :
+        el.mul(el.add(...players), el.const({value: 1 / this.maxVoices}));
+
+    this.core.render(signal, signal);
   }
 }
 
