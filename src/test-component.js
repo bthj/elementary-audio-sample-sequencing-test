@@ -56,11 +56,18 @@ class TestComponent extends HTMLElement {
     createOneOffVoice(soundUrl) {
         const voiceKey = `voice-${Date.now()}`;
         return el.mul(
-            el.sample(
-                { path: soundUrl, mode: 'trigger' },
+            el.mc.sample(
+                {
+                  channels: 1,
+                  path: soundUrl, 
+                  mode: 'trigger',
+                  playbackRate: 1,
+                  startOffset: 0,
+                  endOffset: 0
+                },
                 el.const({ key: `${voiceKey}-trigger`, value: 1 }),
                 1
-            ),
+            )[0],
             el.const({ value: 1 / this.maxVoices }) // Dynamic gain scaling
         );
     }
@@ -312,11 +319,15 @@ class TestComponent extends HTMLElement {
                     el.const({key: `event-${trajectoryId}-${index}-value`, value: index+1}) // +1 to match with the "seq" declaration above, to have all sound ticks non-zero
                 );
                 
-                return el.sample({
+                return el.mc.sample({
+                    channels: 1,
                     key: `player-${trajectoryId}-${index}`,
                     path: event.soundUrl,
-                    mode: 'trigger'
-                }, trigger, el.const({key: `rate-${trajectoryId}-${index}`, value: 1}));
+                    mode: 'trigger',
+                    playbackRate: 1,
+                    startOffset: 0,
+                    endOffset: 0
+                }, trigger, el.const({key: `rate-${trajectoryId}-${index}`, value: 1}))[0];
             });
         
         let signal = players.length === 1 ? 
