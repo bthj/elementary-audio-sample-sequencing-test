@@ -291,12 +291,11 @@ class TestComponent extends HTMLElement {
         const ticker = el.train(100);
         
         const seq = trajectory.events.map((evt, i) => ({
-            tickTime: Math.round(evt.time * 100),
-            value: i,
+            tickTime: Math.round(evt.time * 100)+1, // +1 so that the first tick is within the loop range, and not at its edge
+            value: i+1, // +1 to have all sound ticks non-zero
             soundUrl: evt.soundUrl
         }));
-        
-        const firstTick = seq[0].tickTime;
+        const firstTick = seq[0].tickTime-1; // -1 so that the first tick is within the loop range, and not at its edge
         const latestEndpoint = seq[seq.length - 1].tickTime;
         
         const masterSeq = el.sparseq({
@@ -310,7 +309,7 @@ class TestComponent extends HTMLElement {
             .map((event, index) => {
                 const trigger = el.eq(
                     masterSeq,
-                    el.const({key: `event-${trajectoryId}-${index}-value`, value: index})
+                    el.const({key: `event-${trajectoryId}-${index}-value`, value: index+1}) // +1 to match with the "seq" declaration above, to have all sound ticks non-zero
                 );
                 
                 return el.sample({
@@ -565,167 +564,6 @@ class TestComponent extends HTMLElement {
         this.updateAudioGraph();
 
         this.mode = mode;
-    }
-
-    startTrajectoryRecording() {
-        this.isRecording = true;
-        this.currentRecordingId = Date.now();
-        this.recordingStartTime = null;
-        
-        const trajectoryData = {
-            events: [],
-            isPlaying: false
-        };
-        
-        this.trajectories.set(this.currentRecordingId, trajectoryData);
-        
-        // Add visual element
-        const container = this.shadowRoot.querySelector('.trajectories-container');
-        container.appendChild(this.createTrajectoryElement(this.currentRecordingId));
-        
-        console.log('Started recording new trajectory:', this.currentRecordingId);
-    }
-
-    stopTrajectoryRecording() {
-        if (!this.isRecording || !this.currentRecordingId) return;
-        
-        const trajectory = this.trajectories.get(this.currentRecordingId);
-        const currentTime = (Date.now() - this.recordingStartTime) / 1000;
-        
-        // Add end marker
-        trajectory.events.push({
-            time: currentTime,
-            soundUrl: null
-        });
-        
-        this.isRecording = false;
-        this.playTrajectory(this.currentRecordingId);
-        this.currentRecordingId = null;
-        
-        this.shadowRoot.querySelectorAll('.element').forEach(el => 
-            el.classList.remove('recording'));
-    }
-
-    clearTrajectory(trajectoryId) {
-        this.stopTrajectoryPlayback(trajectoryId);
-        this.trajectories.delete(trajectoryId);
-    }
-
-    recordEvent(element) {
-        if (!this.currentRecordingId) return;
-        
-        const soundUrl = element.getAttribute('data-sound');
-        const currentTime = this.recordingStartTime === null ? 
-            0 : (Date.now() - this.recordingStartTime) / 1000;
-
-        if (this.recordingStartTime === null) {
-            this.recordingStartTime = Date.now();
-        }
-
-        const trajectory = this.trajectories.get(this.currentRecordingId);
-        trajectory.events.push({
-            time: currentTime,
-            soundUrl: soundUrl
-        });
-    }
-
-    async playTrajectory(trajectoryId) {
-        const trajectory = this.trajectories.get(trajectoryId);
-        if (!trajectory || trajectory.events.length === 0) return;
-        
-        trajectory.isPlaying = true;
-        
-        // Create timing signal with unique key for this trajectory
-        const ticker = el.train(100);
-        
-        const seq = trajectory.events.map((evt, i) => ({
-            tickTime: Math.round(evt.time * 100),
-            value: i,
-            soundUrl: evt.soundUrl
-        }));
-        
-        const firstTick = seq[0].tickTime;
-        const latestEndpoint = seq[seq.length - 1].tickTime;
-        
-        const masterSeq = el.sparseq({
-            key: `trajectory-${trajectoryId}-master`,
-            seq: seq,
-            loop: [firstTick, latestEndpoint]
-        }, ticker, el.const({value: 0}));
-        
-        const players = seq
-            .filter(event => event.soundUrl)
-            .map((event, index) => {
-                const trigger = el.eq(
-                    masterSeq,
-                    el.const({key: `event-${trajectoryId}-${index}-value`, value: index})
-                );
-                
-                return el.sample({
-                    key: `player-${trajectoryId}-${index}`,
-                    path: event.soundUrl,
-                    mode: 'trigger'
-                }, trigger, el.const({key: `rate-${trajectoryId}-${index}`, value: 1}));
-            });
-        
-        let signal = players.length === 1 ? 
-            el.mul(players[0], el.const({key: `gain-${trajectoryId}`, value: 1 / this.maxVoices})) :
-            el.mul(el.add(...players), el.const({key: `gain-${trajectoryId}`, value: 1 / this.maxVoices}));
-        
-        this.activeTrajectorySignals.set(trajectoryId, signal);
-        this.updateAudioGraph();
-    }
-
-    stopTrajectoryPlayback(trajectoryId) {
-        const trajectory = this.trajectories.get(trajectoryId);
-        if (trajectory) {
-            trajectory.isPlaying = false;
-            this.activeTrajectorySignals.delete(trajectoryId);
-            this.updateAudioGraph();
-        }
-    }
-
-    clearTrajectory(trajectoryId) {
-        this.stopTrajectoryPlayback(trajectoryId);
-        this.trajectories.delete(trajectoryId);
-    }
-
-    updateAudioGraph() {
-        let signal;
-
-        if (this.mode === 'explore looping') {
-            // For looping mode, sum all active looping voices
-            if (this.loopingVoices.size > 0) {
-                const voices = Array.from(this.loopingVoices.values());
-                signal = el.add(...voices);
-            } else {
-                signal = el.const({value: 0}); // Silence
-            }
-        } else if (this.mode === 'explore one-off') {
-            // For one-off mode, sum all active voices
-            if (this.activeVoices.size > 0) {
-                const voices = Array.from(this.activeVoices.values());
-                signal = voices.length === 1 ? voices[0] : el.add(...voices);
-            } else {
-                signal = el.const({value: 0}); // Silence
-            }
-        }
-
-        // Add trajectory signals
-        if (this.activeTrajectorySignals.size > 0) {
-            const trajectorySignals = Array.from(this.activeTrajectorySignals.values());
-            const trajectoryMix = trajectorySignals.length === 1 ? 
-                trajectorySignals[0] : el.add(...trajectorySignals);
-            
-            signal = signal ? el.add(signal, trajectoryMix) : trajectoryMix;
-        }
-
-        if (!signal) {
-            signal = el.const({value: 0});
-        }
-
-        // Render the same signal to both channels for proper stereo
-        this.core.render(signal, signal);
     }
 }
 
