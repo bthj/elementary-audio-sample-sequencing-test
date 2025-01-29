@@ -404,27 +404,36 @@ class TestComponent extends HTMLElement {
     }
 
     stopTrajectoryRecording() {
-      this.isRecording = false;
+        this.isRecording = false;
 
-      // Clear all active timeout callbacks
-      for (const timeoutId of this.voiceTimeouts.values()) {
-          clearTimeout(timeoutId);
-      }
-      this.voiceTimeouts.clear();
+        // Clear all active timeout callbacks
+        for (const timeoutId of this.voiceTimeouts.values()) {
+            clearTimeout(timeoutId);
+        }
+        this.voiceTimeouts.clear();
 
-      // Clear any playing sounds
-      this.activeVoices.clear();
-      this.loopingVoices.clear();
-      
-      // Update graph to silence
-      this.updateAudioGraph();
+        // Clear any playing sounds
+        this.activeVoices.clear();
+        this.loopingVoices.clear();
+        
+        // Update graph to silence
+        this.updateAudioGraph();
 
-      console.log('Stopped recording trajectory. Events:', this.trajectoryEvents);
-      if (this.trajectoryEvents.length > 0) {
-          setTimeout(() => {
-              this.playTrajectory();
-          }, 50);
-      }
+        // Set the loop-end point to the current time
+        if (this.trajectoryEvents.length > 0) {
+            const currentTime = (Date.now() - this.recordingStartTime) / 1000; // Convert to seconds
+            this.trajectoryEvents.push({
+                time: currentTime,
+                soundUrl: null // Use null to indicate the end of the loop
+            });
+        }
+
+        console.log('Stopped recording trajectory. Events:', this.trajectoryEvents);
+        if (this.trajectoryEvents.length > 0) {
+            setTimeout(() => {
+                this.playTrajectory();
+            }, 50);
+        }
     }
 
     clearTrajectory() {
@@ -451,65 +460,61 @@ class TestComponent extends HTMLElement {
     }
 
     async playTrajectory() {
-      if (this.trajectoryEvents.length === 0) return;
-      
-      this.isPlayingTrajectory = true;
-      
-      // Load samples as before...
-  
-      // Create timing signal with key
-      const ticker = el.train(100);  // 100Hz clock
-  
-      // Format sequence data - each event gets a unique value
-      const seq = this.trajectoryEvents.map((evt, i) => ({
-          tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
-          value: i,  // Use index as unique identifier
-          soundUrl: evt.soundUrl
-      }));
-  
-      // Calculate endpoints including sample durations
-      const firstTick = seq[0].tickTime;
-      const endPoints = seq.map(event => {
-          const sampleDuration = this.sampleDurations.get(event.soundUrl);
-          return event.tickTime + Math.ceil(sampleDuration * 100);
-      });
-      const latestEndpoint = Math.max(...endPoints);
-  
-      // Create master sequence with unique key
-      const masterSeq = el.sparseq({
-          key: 'trajectory-master-sequence',
-          seq: seq,
-          loop: [firstTick, latestEndpoint]
-      }, ticker, el.const({value: 0}));
-  
-      // Create sample players
-      const players = seq.map((event, index) => {
-          // Create trigger when master sequence matches this event's index
-          const trigger = el.eq(
-              masterSeq,
-              el.const({key: `event-${index}-value`, value: index})
-          );
-  
-          return el.sample({
-              key: `player-${index}`,
-              path: event.soundUrl,
-              mode: 'trigger'
-          }, trigger, el.const({key: `rate-${index}`, value: 1}));
-      });
-  
-      // Mix players with keyed gain
-      let signal = players.length === 1 ? 
-          el.mul(players[0], el.const({key: 'master-gain', value: 1 / this.maxVoices})) :
-          el.mul(el.add(...players), el.const({key: 'master-gain', value: 1 / this.maxVoices}));
-  
-      console.log('Rendering trajectory with:', {
-          numEvents: seq.length,
-          loopPoints: [firstTick, latestEndpoint],
-          players: players.length
-      });
-  
-      this.core.render(signal, signal);
-  }
+        if (this.trajectoryEvents.length === 0) return;
+        
+        this.isPlayingTrajectory = true;
+        
+        // Load samples as before...
+    
+        // Create timing signal with key
+        const ticker = el.train(100);  // 100Hz clock
+    
+        // Format sequence data - each event gets a unique value
+        const seq = this.trajectoryEvents.map((evt, i) => ({
+            tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
+            value: i,  // Use index as unique identifier
+            soundUrl: evt.soundUrl
+        }));
+    
+        // Calculate endpoints including sample durations
+        const firstTick = seq[0].tickTime;
+        const latestEndpoint = seq[seq.length - 1].tickTime;
+    
+        // Create master sequence with unique key
+        const masterSeq = el.sparseq({
+            key: 'trajectory-master-sequence',
+            seq: seq,
+            loop: [firstTick, latestEndpoint]
+        }, ticker, el.const({value: 0}));
+    
+        // Create sample players
+        const players = seq.filter(event => event.soundUrl).map((event, index) => {
+            // Create trigger when master sequence matches this event's index
+            const trigger = el.eq(
+                masterSeq,
+                el.const({key: `event-${index}-value`, value: index})
+            );
+    
+            return el.sample({
+                key: `player-${index}`,
+                path: event.soundUrl,
+                mode: 'trigger'
+            }, trigger, el.const({key: `rate-${index}`, value: 1}));
+        });
+    
+        // Mix players with keyed gain
+        let signal = players.length === 1 ? 
+            el.mul(players[0], el.const({key: 'master-gain', value: 1 / this.maxVoices})) :
+            el.mul(el.add(...players), el.const({key: 'master-gain', value: 1 / this.maxVoices}));
+    
+        console.log('Rendering trajectory with:', {
+            numEvents: seq.length,
+            loopPoints: [firstTick, latestEndpoint],
+            players: players.length
+        });
+    
+        this.core.render(signal, signal);
+    }
 }
 
 customElements.define('test-component', TestComponent);
