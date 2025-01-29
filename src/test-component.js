@@ -465,7 +465,6 @@ class TestComponent extends HTMLElement {
                         <div class="trajectory-controls">
                             <button id="record-trajectory">Record Trajectory</button>
                             <button id="stop-trajectory" disabled>Stop Recording</button>
-                            <button id="clear-trajectory" disabled>Clear Trajectory</button>
                         </div>
                     </div>
                 </div>
@@ -504,13 +503,11 @@ class TestComponent extends HTMLElement {
         // Trajectory control handlers
         const recordButton = this.shadowRoot.querySelector('#record-trajectory');
         const stopButton = this.shadowRoot.querySelector('#stop-trajectory');
-        const clearButton = this.shadowRoot.querySelector('#clear-trajectory');
 
         recordButton.addEventListener('click', () => {
             this.startTrajectoryRecording();
             recordButton.disabled = true;
             stopButton.disabled = false;
-            clearButton.disabled = true;
             this.shadowRoot.querySelectorAll('.element').forEach(el => 
                 el.classList.add('recording'));
         });
@@ -519,14 +516,8 @@ class TestComponent extends HTMLElement {
             this.stopTrajectoryRecording();
             recordButton.disabled = false;
             stopButton.disabled = true;
-            clearButton.disabled = false;
             this.shadowRoot.querySelectorAll('.element').forEach(el => 
                 el.classList.remove('recording'));
-        });
-
-        clearButton.addEventListener('click', () => {
-            this.clearTrajectory();
-            clearButton.disabled = true;
         });
 
         // Sound element event handlers
