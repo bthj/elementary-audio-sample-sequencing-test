@@ -353,11 +353,10 @@ class TestComponent extends HTMLElement {
             element.addEventListener('mouseenter', () => {
                 if (!this.initialized) return;
 
-                if (this.isRecording) {
-                    this.recordEvent(element);
-                }
-
                 if (this.interactionMode === 'hover' && !this.isPlayingTrajectory) {
+                    if (this.isRecording) {
+                        this.recordEvent(element);
+                    }
                     if (this.mode === 'explore one-off') {
                         this.playOneOffSound(element);
                     } else if (this.mode === 'explore looping') {
@@ -370,11 +369,10 @@ class TestComponent extends HTMLElement {
             element.addEventListener('click', () => {
                 if (!this.initialized) return;
 
-                if (this.isRecording) {
-                    this.recordEvent(element);
-                }
-
                 if (this.interactionMode === 'click' && !this.isPlayingTrajectory) {
+                    if (this.isRecording) {
+                        this.recordEvent(element);
+                    }
                     if (this.mode === 'explore one-off') {
                         this.playOneOffSound(element);
                     } else if (this.mode === 'explore looping') {
