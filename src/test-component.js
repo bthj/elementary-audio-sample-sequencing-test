@@ -23,6 +23,11 @@ class TestComponent extends HTMLElement {
         this.isPlayingTrajectory = false; // New interaction mode setting
 
         this.voiceTimeouts = new Map(); // Track timeouts for cleanup
+
+        // Replace single trajectory state with multiple trajectories
+        this.trajectories = new Map(); // Map of trajectory ID to trajectory data
+        this.activeTrajectorySignals = new Map(); // Map of trajectory ID to active elementary signal
+        this.currentRecordingId = null;
     }
 
     async initializeAudio() {
@@ -97,6 +102,19 @@ class TestComponent extends HTMLElement {
             } else {
                 signal = el.const({value: 0}); // Silence
             }
+        }
+
+        // Add trajectory signals
+        if (this.activeTrajectorySignals.size > 0) {
+            const trajectorySignals = Array.from(this.activeTrajectorySignals.values());
+            const trajectoryMix = trajectorySignals.length === 1 ? 
+                trajectorySignals[0] : el.add(...trajectorySignals);
+            
+            signal = signal ? el.add(signal, trajectoryMix) : trajectoryMix;
+        }
+
+        if (!signal) {
+            signal = el.const({value: 0});
         }
 
         // Render the same signal to both channels for proper stereo
@@ -179,6 +197,151 @@ class TestComponent extends HTMLElement {
         this.voiceTimeouts.set(voiceId, timeoutId);
     }
 
+    createTrajectoryContainer() {
+        const container = document.createElement('div');
+        container.classList.add('trajectories-container');
+        return container;
+    }
+
+    createTrajectoryElement(trajectoryId) {
+        const el = document.createElement('div');
+        el.classList.add('trajectory-item');
+        el.innerHTML = `
+            <span>Trajectory ${trajectoryId}</span>
+            <button class="stop-trajectory">Stop</button>
+            <button class="clear-trajectory">Clear</button>
+        `;
+        
+        el.querySelector('.stop-trajectory').addEventListener('click', () => {
+            this.stopTrajectoryPlayback(trajectoryId);
+        });
+        
+        el.querySelector('.clear-trajectory').addEventListener('click', () => {
+            this.clearTrajectory(trajectoryId);
+            el.remove();
+        });
+        
+        return el;
+    }
+
+    startTrajectoryRecording() {
+        this.isRecording = true;
+        this.currentRecordingId = Date.now();
+        this.recordingStartTime = null;
+        
+        const trajectoryData = {
+            events: [],
+            isPlaying: false
+        };
+        
+        this.trajectories.set(this.currentRecordingId, trajectoryData);
+        
+        // Add visual element
+        const container = this.shadowRoot.querySelector('.trajectories-container');
+        container.appendChild(this.createTrajectoryElement(this.currentRecordingId));
+        
+        console.log('Started recording new trajectory:', this.currentRecordingId);
+    }
+
+    recordEvent(element) {
+        if (!this.currentRecordingId) return;
+        
+        const soundUrl = element.getAttribute('data-sound');
+        const currentTime = this.recordingStartTime === null ? 
+            0 : (Date.now() - this.recordingStartTime) / 1000;
+
+        if (this.recordingStartTime === null) {
+            this.recordingStartTime = Date.now();
+        }
+
+        const trajectory = this.trajectories.get(this.currentRecordingId);
+        trajectory.events.push({
+            time: currentTime,
+            soundUrl: soundUrl
+        });
+    }
+
+    stopTrajectoryRecording() {
+        if (!this.isRecording || !this.currentRecordingId) return;
+        
+        const trajectory = this.trajectories.get(this.currentRecordingId);
+        const currentTime = (Date.now() - this.recordingStartTime) / 1000;
+        
+        // Add end marker
+        trajectory.events.push({
+            time: currentTime,
+            soundUrl: null
+        });
+        
+        this.isRecording = false;
+        this.playTrajectory(this.currentRecordingId);
+        this.currentRecordingId = null;
+        
+        this.shadowRoot.querySelectorAll('.element').forEach(el => 
+            el.classList.remove('recording'));
+    }
+
+    async playTrajectory(trajectoryId) {
+        const trajectory = this.trajectories.get(trajectoryId);
+        if (!trajectory || trajectory.events.length === 0) return;
+        
+        trajectory.isPlaying = true;
+        
+        // Create timing signal with unique key for this trajectory
+        const ticker = el.train(100);
+        
+        const seq = trajectory.events.map((evt, i) => ({
+            tickTime: Math.round(evt.time * 100),
+            value: i,
+            soundUrl: evt.soundUrl
+        }));
+        
+        const firstTick = seq[0].tickTime;
+        const latestEndpoint = seq[seq.length - 1].tickTime;
+        
+        const masterSeq = el.sparseq({
+            key: `trajectory-${trajectoryId}-master`,
+            seq: seq,
+            loop: [firstTick, latestEndpoint]
+        }, ticker, el.const({value: 0}));
+        
+        const players = seq
+            .filter(event => event.soundUrl)
+            .map((event, index) => {
+                const trigger = el.eq(
+                    masterSeq,
+                    el.const({key: `event-${trajectoryId}-${index}-value`, value: index})
+                );
+                
+                return el.sample({
+                    key: `player-${trajectoryId}-${index}`,
+                    path: event.soundUrl,
+                    mode: 'trigger'
+                }, trigger, el.const({key: `rate-${trajectoryId}-${index}`, value: 1}));
+            });
+        
+        let signal = players.length === 1 ? 
+            el.mul(players[0], el.const({key: `gain-${trajectoryId}`, value: 1 / this.maxVoices})) :
+            el.mul(el.add(...players), el.const({key: `gain-${trajectoryId}`, value: 1 / this.maxVoices}));
+        
+        this.activeTrajectorySignals.set(trajectoryId, signal);
+        this.updateAudioGraph();
+    }
+
+    stopTrajectoryPlayback(trajectoryId) {
+        const trajectory = this.trajectories.get(trajectoryId);
+        if (trajectory) {
+            trajectory.isPlaying = false;
+            this.activeTrajectorySignals.delete(trajectoryId);
+            this.updateAudioGraph();
+        }
+    }
+
+    clearTrajectory(trajectoryId) {
+        this.stopTrajectoryPlayback(trajectoryId);
+        this.trajectories.delete(trajectoryId);
+    }
+
     connectedCallback() {
         this.shadowRoot.innerHTML = `
             <style>
@@ -245,6 +408,24 @@ class TestComponent extends HTMLElement {
                 .recording {
                     background-color: #ff4444 !important;
                 }
+                .trajectories-container {
+                    margin: 20px 0;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                }
+                .trajectory-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    padding: 10px;
+                    background: #f0f0f0;
+                    border-radius: 4px;
+                }
+                .trajectory-item button {
+                    padding: 5px 10px;
+                    cursor: pointer;
+                }
             </style>
             <div class="container">
                 <h1>Elementary Audio Test</h1>
@@ -294,6 +475,7 @@ class TestComponent extends HTMLElement {
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCXC5834FMVTRV3C6PZ1MH4E-4_0_1.wav">Element 2</div>
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCX1R8B6A9QSMPEJ7D1C2WY1-4_0_1.wav">Element 3</div>
                 </div>
+                <div class="trajectories-container"></div>
             </div>
         `;
 
@@ -396,121 +578,162 @@ class TestComponent extends HTMLElement {
 
     startTrajectoryRecording() {
         this.isRecording = true;
-        this.trajectoryEvents = [];
+        this.currentRecordingId = Date.now();
         this.recordingStartTime = null;
-        console.log('Started recording trajectory');
+        
+        const trajectoryData = {
+            events: [],
+            isPlaying: false
+        };
+        
+        this.trajectories.set(this.currentRecordingId, trajectoryData);
+        
+        // Add visual element
+        const container = this.shadowRoot.querySelector('.trajectories-container');
+        container.appendChild(this.createTrajectoryElement(this.currentRecordingId));
+        
+        console.log('Started recording new trajectory:', this.currentRecordingId);
     }
 
     stopTrajectoryRecording() {
-        this.isRecording = false;
-
-        // Clear all active timeout callbacks
-        for (const timeoutId of this.voiceTimeouts.values()) {
-            clearTimeout(timeoutId);
-        }
-        this.voiceTimeouts.clear();
-
-        // Clear any playing sounds
-        this.activeVoices.clear();
-        this.loopingVoices.clear();
+        if (!this.isRecording || !this.currentRecordingId) return;
         
-        // Update graph to silence
-        this.updateAudioGraph();
-
-        // Set the loop-end point to the current time
-        if (this.trajectoryEvents.length > 0) {
-            const currentTime = (Date.now() - this.recordingStartTime) / 1000; // Convert to seconds
-            this.trajectoryEvents.push({
-                time: currentTime,
-                soundUrl: null // Use null to indicate the end of the loop
-            });
-        }
-
-        console.log('Stopped recording trajectory. Events:', this.trajectoryEvents);
-        if (this.trajectoryEvents.length > 0) {
-            setTimeout(() => {
-                this.playTrajectory();
-            }, 50);
-        }
+        const trajectory = this.trajectories.get(this.currentRecordingId);
+        const currentTime = (Date.now() - this.recordingStartTime) / 1000;
+        
+        // Add end marker
+        trajectory.events.push({
+            time: currentTime,
+            soundUrl: null
+        });
+        
+        this.isRecording = false;
+        this.playTrajectory(this.currentRecordingId);
+        this.currentRecordingId = null;
+        
+        this.shadowRoot.querySelectorAll('.element').forEach(el => 
+            el.classList.remove('recording'));
     }
 
-    clearTrajectory() {
-        this.trajectoryEvents = [];
-        this.isPlayingTrajectory = false;
-        this.updateAudioGraph(); // Reset to silence
-        console.log('Cleared trajectory');
+    clearTrajectory(trajectoryId) {
+        this.stopTrajectoryPlayback(trajectoryId);
+        this.trajectories.delete(trajectoryId);
     }
 
     recordEvent(element) {
+        if (!this.currentRecordingId) return;
+        
         const soundUrl = element.getAttribute('data-sound');
         const currentTime = this.recordingStartTime === null ? 
-            0 : (Date.now() - this.recordingStartTime) / 1000; // Convert to seconds
+            0 : (Date.now() - this.recordingStartTime) / 1000;
 
         if (this.recordingStartTime === null) {
             this.recordingStartTime = Date.now();
         }
 
-        this.trajectoryEvents.push({
+        const trajectory = this.trajectories.get(this.currentRecordingId);
+        trajectory.events.push({
             time: currentTime,
             soundUrl: soundUrl
         });
-        console.log('Recorded event:', { time: currentTime, soundUrl });
     }
 
-    async playTrajectory() {
-        if (this.trajectoryEvents.length === 0) return;
+    async playTrajectory(trajectoryId) {
+        const trajectory = this.trajectories.get(trajectoryId);
+        if (!trajectory || trajectory.events.length === 0) return;
         
-        this.isPlayingTrajectory = true;
+        trajectory.isPlaying = true;
         
-        // Load samples as before...
-    
-        // Create timing signal with key
-        const ticker = el.train(100);  // 100Hz clock
-    
-        // Format sequence data - each event gets a unique value
-        const seq = this.trajectoryEvents.map((evt, i) => ({
-            tickTime: Math.round(evt.time * 100), // Convert to ticks at 100Hz
-            value: i,  // Use index as unique identifier
+        // Create timing signal with unique key for this trajectory
+        const ticker = el.train(100);
+        
+        const seq = trajectory.events.map((evt, i) => ({
+            tickTime: Math.round(evt.time * 100),
+            value: i,
             soundUrl: evt.soundUrl
         }));
-    
-        // Calculate endpoints including sample durations
+        
         const firstTick = seq[0].tickTime;
         const latestEndpoint = seq[seq.length - 1].tickTime;
-    
-        // Create master sequence with unique key
+        
         const masterSeq = el.sparseq({
-            key: 'trajectory-master-sequence',
+            key: `trajectory-${trajectoryId}-master`,
             seq: seq,
             loop: [firstTick, latestEndpoint]
         }, ticker, el.const({value: 0}));
-    
-        // Create sample players
-        const players = seq.filter(event => event.soundUrl).map((event, index) => {
-            // Create trigger when master sequence matches this event's index
-            const trigger = el.eq(
-                masterSeq,
-                el.const({key: `event-${index}-value`, value: index})
-            );
-    
-            return el.sample({
-                key: `player-${index}`,
-                path: event.soundUrl,
-                mode: 'trigger'
-            }, trigger, el.const({key: `rate-${index}`, value: 1}));
-        });
-    
-        // Mix players with keyed gain
+        
+        const players = seq
+            .filter(event => event.soundUrl)
+            .map((event, index) => {
+                const trigger = el.eq(
+                    masterSeq,
+                    el.const({key: `event-${trajectoryId}-${index}-value`, value: index})
+                );
+                
+                return el.sample({
+                    key: `player-${trajectoryId}-${index}`,
+                    path: event.soundUrl,
+                    mode: 'trigger'
+                }, trigger, el.const({key: `rate-${trajectoryId}-${index}`, value: 1}));
+            });
+        
         let signal = players.length === 1 ? 
-            el.mul(players[0], el.const({key: 'master-gain', value: 1 / this.maxVoices})) :
-            el.mul(el.add(...players), el.const({key: 'master-gain', value: 1 / this.maxVoices}));
-    
-        console.log('Rendering trajectory with:', {
-            numEvents: seq.length,
-            loopPoints: [firstTick, latestEndpoint],
-            players: players.length
-        });
-    
+            el.mul(players[0], el.const({key: `gain-${trajectoryId}`, value: 1 / this.maxVoices})) :
+            el.mul(el.add(...players), el.const({key: `gain-${trajectoryId}`, value: 1 / this.maxVoices}));
+        
+        this.activeTrajectorySignals.set(trajectoryId, signal);
+        this.updateAudioGraph();
+    }
+
+    stopTrajectoryPlayback(trajectoryId) {
+        const trajectory = this.trajectories.get(trajectoryId);
+        if (trajectory) {
+            trajectory.isPlaying = false;
+            this.activeTrajectorySignals.delete(trajectoryId);
+            this.updateAudioGraph();
+        }
+    }
+
+    clearTrajectory(trajectoryId) {
+        this.stopTrajectoryPlayback(trajectoryId);
+        this.trajectories.delete(trajectoryId);
+    }
+
+    updateAudioGraph() {
+        let signal;
+
+        if (this.mode === 'explore looping') {
+            // For looping mode, sum all active looping voices
+            if (this.loopingVoices.size > 0) {
+                const voices = Array.from(this.loopingVoices.values());
+                signal = el.add(...voices);
+            } else {
+                signal = el.const({value: 0}); // Silence
+            }
+        } else if (this.mode === 'explore one-off') {
+            // For one-off mode, sum all active voices
+            if (this.activeVoices.size > 0) {
+                const voices = Array.from(this.activeVoices.values());
+                signal = voices.length === 1 ? voices[0] : el.add(...voices);
+            } else {
+                signal = el.const({value: 0}); // Silence
+            }
+        }
+
+        // Add trajectory signals
+        if (this.activeTrajectorySignals.size > 0) {
+            const trajectorySignals = Array.from(this.activeTrajectorySignals.values());
+            const trajectoryMix = trajectorySignals.length === 1 ? 
+                trajectorySignals[0] : el.add(...trajectorySignals);
+            
+            signal = signal ? el.add(signal, trajectoryMix) : trajectoryMix;
+        }
+
+        if (!signal) {
+            signal = el.const({value: 0});
+        }
+
+        // Render the same signal to both channels for proper stereo
         this.core.render(signal, signal);
     }
 }
