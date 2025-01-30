@@ -11,6 +11,7 @@ class Sequence {
         this.volume = 1;
         this.isMuted = false;
         this.isSolo = false;
+        this.startOffset = 0; // Add start offset property (0 to 1)
     }
 
     addElement(soundUrl) {
@@ -221,7 +222,9 @@ class TestComponent extends HTMLElement {
                 }
 
                 const sampleDuration = this.sampleDurations.get(element.soundUrl);
-                const startTime = times[index] * sequenceDuration;
+                // Add sequence start offset to the timing calculation
+                const startTime = sequence.startOffset * sequenceDuration + 
+                                times[index] * (1 - sequence.startOffset) * sequenceDuration;
                 const endTime = Math.max(startTime + sampleDuration, sequenceDuration);
 
                 const time = el.mod(
@@ -588,6 +591,11 @@ class TestComponent extends HTMLElement {
                         <option value="8 bars">8 bars</option>
                     </select>
                 </div>
+                <div class="parameter-group">
+                    <label>Sequence Start Offset: <span class="start-offset-value">0%</span></label>
+                    <input type="range" class="sequence-start-offset" 
+                           data-id="${sequenceId}" min="0" max="1" step="0.01" value="0">
+                </div>
             </div>
             <div class="sequence-elements" data-id="${sequenceId}"></div>
         `;
@@ -715,6 +723,17 @@ class TestComponent extends HTMLElement {
             
             // Update all sequences since solo affects them all
             this.sequences.forEach((_, id) => this.updateSequencePlayback(id));
+        });
+
+        const startOffsetSlider = container.querySelector(`.sequence-start-offset[data-id="${sequenceId}"]`);
+        const startOffsetValue = container.querySelector('.start-offset-value');
+
+        startOffsetSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            const sequence = this.sequences.get(sequenceId);
+            sequence.startOffset = value;
+            startOffsetValue.textContent = `${Math.round(value * 100)}%`;
+            this.updateSequencePlayback(sequenceId);
         });
     }
 
