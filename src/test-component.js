@@ -59,6 +59,12 @@ class Sequence {
 
         return positions;
     }
+
+    removeElement(index) {
+        if (index >= 0 && index < this.elements.length) {
+            this.elements.splice(index, 1);
+        }
+    }
 }
 
 class TestComponent extends HTMLElement {
@@ -613,6 +619,20 @@ console.log('sequenceDuration', sequenceDuration);
                 .element.in-sequence {
                     background-color: #4488ff;
                 }
+                .remove-element {
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    border: 1px solid #ccc;
+                    background: #fff;
+                    cursor: pointer;
+                    font-size: 12px;
+                    color: #666;
+                }
+                .remove-element:hover {
+                    background: #ff4444;
+                    color: white;
+                    border-color: #dd2222;
+                }
             </style>
             <div class="container">
                 <h1>Elementary Audio Test</h1>
@@ -831,24 +851,7 @@ console.log('sequenceDuration', sequenceDuration);
                     this.sequence.addElement(soundUrl);
                     element.classList.add('in-sequence');
                     
-                    // Add element to sequence display
-                    const sequenceElements = this.shadowRoot.querySelector('.sequence-elements');
-                    const elementIndex = this.sequence.elements.length - 1;
-                    
-                    const elementDiv = document.createElement('div');
-                    elementDiv.classList.add('sequence-element');
-                    elementDiv.innerHTML = `
-                        <span>Element ${elementIndex + 1}</span>
-                        <input type="range" min="0.1" max="2" step="0.1" value="1" 
-                               data-index="${elementIndex}">
-                    `;
-                    
-                    elementDiv.querySelector('input').addEventListener('input', (e) => {
-                        this.sequence.setOffset(parseInt(e.target.dataset.index), parseFloat(e.target.value));
-                        this.updateSequencePlayback();
-                    });
-                    
-                    sequenceElements.appendChild(elementDiv);
+                    this.updateSequenceElementsUI();
 
                     try {
                         this.updateSequencePlayback();
@@ -859,6 +862,43 @@ console.log('sequenceDuration', sequenceDuration);
                     originalClickHandler(event);
                 }
             };
+        });
+    }
+
+    updateSequenceElementsUI() {
+        const sequenceElements = this.shadowRoot.querySelector('.sequence-elements');
+        sequenceElements.innerHTML = '';
+        
+        this.sequence.elements.forEach((element, index) => {
+            const elementDiv = document.createElement('div');
+            elementDiv.classList.add('sequence-element');
+            elementDiv.innerHTML = `
+                <span>Element ${index + 1}</span>
+                <input type="range" min="0.1" max="2" step="0.1" value="${element.offset}" 
+                       data-index="${index}">
+                <button class="remove-element" data-index="${index}">✕</button>
+            `;
+            
+            elementDiv.querySelector('input').addEventListener('input', (e) => {
+                this.sequence.setOffset(parseInt(e.target.dataset.index), parseFloat(e.target.value));
+                this.updateSequencePlayback();
+            });
+
+            elementDiv.querySelector('.remove-element').addEventListener('click', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                const removedSound = this.sequence.elements[index].soundUrl;
+                this.sequence.removeElement(index);
+                
+                // Find and remove highlight from the corresponding element if it's not used anymore
+                if (!this.sequence.elements.some(el => el.soundUrl === removedSound)) {
+                    this.shadowRoot.querySelector(`[data-sound="${removedSound}"]`)?.classList.remove('in-sequence');
+                }
+                
+                this.updateSequenceElementsUI();
+                this.updateSequencePlayback();
+            });
+            
+            sequenceElements.appendChild(elementDiv);
         });
     }
 
