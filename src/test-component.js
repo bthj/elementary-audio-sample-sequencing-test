@@ -13,12 +13,26 @@ class Sequence {
     addElement(soundUrl) {
         this.elements.push({
             soundUrl,
-            offset: 1
+            offset: 1,
+            shift: 0,
+            stretch: 1
         });
     }
 
     clear() {
         this.elements = [];
+    }
+
+    setShift(index, shift) {
+        if (index >= 0 && index < this.elements.length) {
+            this.elements[index].shift = shift;
+        }
+    }
+
+    setStretch(index, stretch) {
+        if (index >= 0 && index < this.elements.length) {
+            this.elements[index].stretch = stretch;
+        }
     }
 
     setOffset(index, offset) {
@@ -191,7 +205,9 @@ console.log('sequenceDuration', sequenceDuration);
                       seq: [
                           { time: startTime, value: 1 },
                           { time: endTime, value: 0 }
-                      ]
+                      ],
+                      shift: element.shift,
+                      stretch: element.stretch
                     }, 
                     // el.div(el.time(), el.sr())
                     time
@@ -633,6 +649,20 @@ console.log('sequenceDuration', sequenceDuration);
                     color: white;
                     border-color: #dd2222;
                 }
+                .parameter-sliders {
+                    display: flex;
+                    gap: 10px;
+                    align-items: center;
+                }
+                .parameter-slider {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 5px;
+                }
+                .parameter-value {
+                    font-size: 0.8em;
+                    color: #666;
+                }
             </style>
             <div class="container">
                 <h1>Elementary Audio Test</h1>
@@ -874,13 +904,51 @@ console.log('sequenceDuration', sequenceDuration);
             elementDiv.classList.add('sequence-element');
             elementDiv.innerHTML = `
                 <span>Element ${index + 1}</span>
-                <input type="range" min="0.1" max="2" step="0.1" value="${element.offset}" 
-                       data-index="${index}">
+                <div class="parameter-sliders">
+                    <div class="parameter-slider">
+                        <label>Offset</label>
+                        <input type="range" min="0.1" max="2" step="0.1" value="${element.offset}" 
+                               class="offset-slider" data-index="${index}">
+                        <span class="parameter-value">${element.offset}x</span>
+                    </div>
+                    <div class="parameter-slider">
+                        <label>Shift</label>
+                        <input type="range" min="-12" max="12" step="1" value="${element.shift}" 
+                               class="shift-slider" data-index="${index}">
+                        <span class="parameter-value">${element.shift} st</span>
+                    </div>
+                    <div class="parameter-slider">
+                        <label>Stretch</label>
+                        <input type="range" min="0.25" max="4" step="0.25" value="${element.stretch}" 
+                               class="stretch-slider" data-index="${index}">
+                        <span class="parameter-value">${element.stretch}x</span>
+                    </div>
+                </div>
                 <button class="remove-element" data-index="${index}">✕</button>
             `;
             
-            elementDiv.querySelector('input').addEventListener('input', (e) => {
-                this.sequence.setOffset(parseInt(e.target.dataset.index), parseFloat(e.target.value));
+            const offsetSlider = elementDiv.querySelector('.offset-slider');
+            const shiftSlider = elementDiv.querySelector('.shift-slider');
+            const stretchSlider = elementDiv.querySelector('.stretch-slider');
+            
+            offsetSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequence.setOffset(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value}x`;
+                this.updateSequencePlayback();
+            });
+
+            shiftSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequence.setShift(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value} st`;
+                this.updateSequencePlayback();
+            });
+
+            stretchSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequence.setStretch(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value}x`;
                 this.updateSequencePlayback();
             });
 
