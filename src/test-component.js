@@ -1,6 +1,66 @@
 import {el} from '@elemaudio/core';
 import WebRenderer from '@elemaudio/web-renderer';
 
+// Add new Sequence class before TestComponent
+class Sequence {
+    constructor() {
+        this.elements = [];
+        this.bpm = 120;
+        this.bars = "1 bar";
+        this.isRecording = false;
+    }
+
+    addElement(soundUrl) {
+        this.elements.push({
+            soundUrl,
+            offset: 1
+        });
+    }
+
+    clear() {
+        this.elements = [];
+    }
+
+    setOffset(index, offset) {
+        if (index >= 0 && index < this.elements.length) {
+            this.elements[index].offset = offset;
+        }
+    }
+
+    getDurationInSeconds() {
+        const beatsPerBar = 4;
+        const barMultiplier = {
+            "1/4 bar": 0.25,
+            "1/2 bar": 0.5,
+            "1 bar": 1,
+            "2 bars": 2,
+            "3 bars": 3,
+            "4 bars": 4,
+            "8 bars": 8
+        }[this.bars] || 1;
+
+        return (60 / this.bpm) * beatsPerBar * barMultiplier;
+    }
+
+    getElementTimes() {
+        if (this.elements.length === 0) return [];
+
+        const positions = [];
+        let totalOffset = 0;
+        
+        this.elements.forEach(el => totalOffset += el.offset);
+        
+        let currentTime = 0;
+        this.elements.forEach(el => {
+            const relativeTime = currentTime / totalOffset;
+            positions.push(relativeTime);
+            currentTime += el.offset;
+        });
+
+        return positions;
+    }
+}
+
 class TestComponent extends HTMLElement {
     constructor() {
         super();
@@ -28,6 +88,10 @@ class TestComponent extends HTMLElement {
         this.trajectories = new Map(); // Map of trajectory ID to trajectory data
         this.activeTrajectorySignals = new Map(); // Map of trajectory ID to active elementary signal
         this.currentRecordingId = null;
+
+        // Add sequence state
+        this.sequence = new Sequence();
+        this.sequenceSignal = null;
     }
 
     async initializeAudio() {
@@ -90,6 +154,71 @@ class TestComponent extends HTMLElement {
         );
     }
 
+    createSequenceVoices() {
+        if (this.sequence.elements.length === 0) return null;
+
+        const sequenceDuration = this.sequence.getDurationInSeconds();
+        const times = this.sequence.getElementTimes();
+        try {
+            // Create array of sample sequencers
+            const voices = this.sequence.elements.map((element, index) => {
+                if (!this.uploadedSamples.has(element.soundUrl)) {
+                    console.warn('Sample not loaded:', element.soundUrl);
+                    return null;
+                }
+console.log('times', times);
+                const sampleDuration = this.sampleDurations.get(element.soundUrl);
+                const startTime = times[index] * sequenceDuration;
+                const endTime = Math.max(startTime + sampleDuration, sequenceDuration);
+console.log('startTime', startTime, 'endTime', endTime);
+console.log('sampleDuration', sampleDuration);
+console.log('sequenceDuration', sequenceDuration);
+                const time = el.mod(
+                  el.div(el.time(), el.sr()),
+                  sequenceDuration
+                );
+
+                try {
+                  return el.sampleseq2({
+                      path: element.soundUrl,
+                      duration: sampleDuration,
+                      seq: [
+                          { time: startTime, value: 1 },
+                          { time: endTime, value: 0 }
+                      ]
+                    }, 
+                    // el.div(el.time(), el.sr())
+                    time
+                  );
+                } catch (error) {
+                    console.error('Failed to create sample sequencer:', error);
+                    return null;
+                }
+            }).filter(voice => voice !== null);
+
+            if (voices.length === 0) return null;
+
+            // Sum all voices and apply gain
+            return voices.length === 1 ? 
+                el.mul(voices[0], el.const({value: 1 / this.maxVoices})) :
+                el.mul(el.add(...voices), el.const({value: 1 / this.maxVoices}));
+        } catch (error) {
+            console.error('Error in createSequenceVoices:', error);
+            return null;
+        }
+    }
+
+    updateSequencePlayback() {
+        try {
+            this.sequenceSignal = this.createSequenceVoices();
+            this.updateAudioGraph();
+        } catch (error) {
+            console.error('Error in updateSequencePlayback:', error);
+            this.sequenceSignal = null;
+            this.updateAudioGraph();
+        }
+    }
+
     updateAudioGraph() {
         let signal;
 
@@ -109,6 +238,11 @@ class TestComponent extends HTMLElement {
             } else {
                 signal = el.const({value: 0}); // Silence
             }
+        }
+
+        // Add sequence signal if active
+        if (this.sequenceSignal) {
+            signal = signal ? el.add(signal, this.sequenceSignal) : this.sequenceSignal;
         }
 
         // Add trajectory signals
@@ -436,6 +570,49 @@ class TestComponent extends HTMLElement {
                     padding: 5px 10px;
                     cursor: pointer;
                 }
+                .sequence-controls {
+                    margin: 20px 0;
+                    padding: 15px;
+                    background: #f5f5f5;
+                    border-radius: 8px;
+                }
+                .sequence-buttons {
+                    display: flex;
+                    gap: 10px;
+                    margin-bottom: 15px;
+                }
+                .sequence-parameters {
+                    display: flex;
+                    gap: 20px;
+                    align-items: center;
+                }
+                .parameter-group {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 5px;
+                }
+                .parameter-group label {
+                    font-size: 0.9em;
+                    color: #666;
+                }
+                .sequence-elements {
+                    margin-top: 15px;
+                }
+                .sequence-element {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    margin: 5px 0;
+                    padding: 8px;
+                    background: #fff;
+                    border-radius: 4px;
+                }
+                .sequence-element input[type="range"] {
+                    flex: 1;
+                }
+                .element.in-sequence {
+                    background-color: #4488ff;
+                }
             </style>
             <div class="container">
                 <h1>Elementary Audio Test</h1>
@@ -485,6 +662,31 @@ class TestComponent extends HTMLElement {
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCX1R8B6A9QSMPEJ7D1C2WY1-4_0_1.wav">Element 3</div>
                 </div>
                 <div class="trajectories-container"></div>
+                <div class="sequence-controls">
+                    <div class="sequence-buttons">
+                        <button id="record-sequence">Record Sequence</button>
+                        <button id="clear-sequence" disabled>Clear Sequence</button>
+                    </div>
+                    <div class="sequence-parameters">
+                        <div class="parameter-group">
+                            <label>Bars:</label>
+                            <select id="sequence-bars">
+                                <option value="1/4 bar">1/4 bar</option>
+                                <option value="1/2 bar">1/2 bar</option>
+                                <option value="1 bar" selected>1 bar</option>
+                                <option value="2 bars">2 bars</option>
+                                <option value="3 bars">3 bars</option>
+                                <option value="4 bars">4 bars</option>
+                                <option value="8 bars">8 bars</option>
+                            </select>
+                        </div>
+                        <div class="parameter-group">
+                            <label>BPM: <span id="bpm-value">120</span></label>
+                            <input type="range" id="sequence-bpm" min="10" max="300" value="120">
+                        </div>
+                    </div>
+                    <div class="sequence-elements"></div>
+                </div>
             </div>
         `;
 
@@ -530,6 +732,43 @@ class TestComponent extends HTMLElement {
                 el.classList.remove('recording'));
         });
 
+        // Add sequence control event listeners
+        const recordSequenceBtn = this.shadowRoot.querySelector('#record-sequence');
+        const clearSequenceBtn = this.shadowRoot.querySelector('#clear-sequence');
+        const barsSelect = this.shadowRoot.querySelector('#sequence-bars');
+        const bpmSlider = this.shadowRoot.querySelector('#sequence-bpm');
+        const bpmValue = this.shadowRoot.querySelector('#bpm-value');
+
+        recordSequenceBtn.addEventListener('click', () => {
+            this.sequence.isRecording = true;
+            recordSequenceBtn.disabled = true;
+            clearSequenceBtn.disabled = false;
+        });
+
+        clearSequenceBtn.addEventListener('click', () => {
+            this.sequence.clear();
+            this.sequenceSignal = null;
+            this.updateAudioGraph();
+            this.sequence.isRecording = false;
+            recordSequenceBtn.disabled = false;
+            clearSequenceBtn.disabled = true;
+            this.shadowRoot.querySelector('.sequence-elements').innerHTML = '';
+            this.shadowRoot.querySelectorAll('.element').forEach(el => {
+                el.classList.remove('in-sequence');
+            });
+        });
+
+        barsSelect.addEventListener('change', (e) => {
+            this.sequence.bars = e.target.value;
+            this.updateSequencePlayback();
+        });
+
+        bpmSlider.addEventListener('input', (e) => {
+            this.sequence.bpm = parseInt(e.target.value);
+            bpmValue.textContent = this.sequence.bpm;
+            this.updateSequencePlayback();
+        });
+
         // Sound element event handlers
         this.shadowRoot.querySelectorAll('.element').forEach(element => {
             // Handler for hover interactions
@@ -563,6 +802,63 @@ class TestComponent extends HTMLElement {
                     }
                 }
             });
+
+            const originalClickHandler = element.onclick;
+            element.onclick = async (event) => {
+                if (!this.initialized) return;
+
+                if (this.sequence.isRecording) {
+                    const soundUrl = element.getAttribute('data-sound');
+                    
+                    // Ensure sample is loaded into virtual file system
+                    if (!this.uploadedSamples.has(soundUrl)) {
+                        try {
+                            const res = await fetch(soundUrl);
+                            const sampleBuffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
+                            
+                            await this.core.updateVirtualFileSystem({
+                                [soundUrl]: [sampleBuffer.getChannelData(0)]
+                            });
+                            
+                            this.uploadedSamples.add(soundUrl);
+                            this.sampleDurations.set(soundUrl, sampleBuffer.duration);
+                        } catch (error) {
+                            console.error('Failed to load sample:', error);
+                            return;
+                        }
+                    }
+
+                    this.sequence.addElement(soundUrl);
+                    element.classList.add('in-sequence');
+                    
+                    // Add element to sequence display
+                    const sequenceElements = this.shadowRoot.querySelector('.sequence-elements');
+                    const elementIndex = this.sequence.elements.length - 1;
+                    
+                    const elementDiv = document.createElement('div');
+                    elementDiv.classList.add('sequence-element');
+                    elementDiv.innerHTML = `
+                        <span>Element ${elementIndex + 1}</span>
+                        <input type="range" min="0.1" max="2" step="0.1" value="1" 
+                               data-index="${elementIndex}">
+                    `;
+                    
+                    elementDiv.querySelector('input').addEventListener('input', (e) => {
+                        this.sequence.setOffset(parseInt(e.target.dataset.index), parseFloat(e.target.value));
+                        this.updateSequencePlayback();
+                    });
+                    
+                    sequenceElements.appendChild(elementDiv);
+
+                    try {
+                        this.updateSequencePlayback();
+                    } catch (error) {
+                        console.error('Failed to update sequence playback:', error);
+                    }
+                } else if (originalClickHandler) {
+                    originalClickHandler(event);
+                }
+            };
         });
     }
 
