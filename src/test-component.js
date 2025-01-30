@@ -116,9 +116,14 @@ class TestComponent extends HTMLElement {
         this.activeTrajectorySignals = new Map(); // Map of trajectory ID to active elementary signal
         this.currentRecordingId = null;
 
-        // Add sequence state
-        this.sequence = new Sequence();
-        this.sequenceSignal = null;
+        // Replace single sequence with multiple sequences
+        this.sequences = new Map();
+        this.sequenceSignals = new Map();
+        this.globalBpm = 120;
+        
+        // Remove single sequence state
+        // this.sequence = new Sequence();
+        // this.sequenceSignal = null;
 
         // Add sample playback parameters
         this.sampleParams = {
@@ -126,6 +131,8 @@ class TestComponent extends HTMLElement {
             endOffset: 0,
             playbackRate: 1
         };
+
+        this.activeSequenceId = null; // Add tracking for active sequence
     }
 
     async initializeAudio() {
@@ -191,14 +198,14 @@ class TestComponent extends HTMLElement {
         );
     }
 
-    createSequenceVoices() {
-        if (this.sequence.elements.length === 0) return null;
+    createSequenceVoices(sequence) {
+        if (sequence.elements.length === 0) return null;
 
-        const sequenceDuration = this.sequence.getDurationInSeconds();
-        const times = this.sequence.getElementTimes();
+        const sequenceDuration = sequence.getDurationInSeconds();
+        const times = sequence.getElementTimes();
         try {
             // Create array of sample sequencers
-            const voices = this.sequence.elements.map((element, index) => {
+            const voices = sequence.elements.map((element, index) => {
                 if (!this.uploadedSamples.has(element.soundUrl)) {
                     console.warn('Sample not loaded:', element.soundUrl);
                     return null;
@@ -245,13 +252,21 @@ class TestComponent extends HTMLElement {
         }
     }
 
-    updateSequencePlayback() {
+    updateSequencePlayback(sequenceId) {
         try {
-            this.sequenceSignal = this.createSequenceVoices();
+            const sequence = this.sequences.get(sequenceId);
+            if (!sequence) return;
+
+            const signal = this.createSequenceVoices(sequence);
+            if (signal) {
+                this.sequenceSignals.set(sequenceId, signal);
+            } else {
+                this.sequenceSignals.delete(sequenceId);
+            }
             this.updateAudioGraph();
         } catch (error) {
             console.error('Error in updateSequencePlayback:', error);
-            this.sequenceSignal = null;
+            this.sequenceSignals.delete(sequenceId);
             this.updateAudioGraph();
         }
     }
@@ -277,9 +292,12 @@ class TestComponent extends HTMLElement {
             }
         }
 
-        // Add sequence signal if active
-        if (this.sequenceSignal) {
-            signal = signal ? el.add(signal, this.sequenceSignal) : this.sequenceSignal;
+        // Add all sequence signals if active
+        if (this.sequenceSignals.size > 0) {
+            const seqSignals = Array.from(this.sequenceSignals.values());
+            const seqMix = seqSignals.length === 1 ? 
+                seqSignals[0] : el.add(...seqSignals);
+            signal = signal ? el.add(signal, seqMix) : seqMix;
         }
 
         // Add trajectory signals
@@ -523,6 +541,207 @@ class TestComponent extends HTMLElement {
         this.trajectories.delete(trajectoryId);
     }
 
+    createSequenceControls(sequenceId) {
+        const container = document.createElement('div');
+        container.classList.add('sequence-controls');
+        container.innerHTML = `
+            <div class="sequence-header">
+                <h3>Sequence ${sequenceId}</h3>
+                <div class="sequence-buttons">
+                    <button class="activate-sequence" data-id="${sequenceId}">
+                        ${this.activeSequenceId === sequenceId ? 'Active' : 'Activate'}
+                    </button>
+                    <button class="clear-sequence" data-id="${sequenceId}" disabled>Clear</button>
+                    <button class="remove-sequence" data-id="${sequenceId}">Remove</button>
+                </div>
+            </div>
+            <div class="sequence-parameters">
+                <div class="parameter-group">
+                    <label>Bars:</label>
+                    <select class="sequence-bars" data-id="${sequenceId}">
+                        <option value="1/4 bar">1/4 bar</option>
+                        <option value="1/2 bar">1/2 bar</option>
+                        <option value="1 bar" selected>1 bar</option>
+                        <option value="2 bars">2 bars</option>
+                        <option value="3 bars">3 bars</option>
+                        <option value="4 bars">4 bars</option>
+                        <option value="8 bars">8 bars</option>
+                    </select>
+                </div>
+            </div>
+            <div class="sequence-elements" data-id="${sequenceId}"></div>
+        `;
+
+        this.setupSequenceControlHandlers(container, sequenceId);
+        this.updateSequenceActiveState(container, sequenceId);
+        return container;
+    }
+
+    setupSequenceControlHandlers(container, sequenceId) {
+        const activateBtn = container.querySelector(`.activate-sequence[data-id="${sequenceId}"]`);
+        const clearBtn = container.querySelector(`.clear-sequence[data-id="${sequenceId}"]`);
+        const removeBtn = container.querySelector(`.remove-sequence[data-id="${sequenceId}"]`);
+        const barsSelect = container.querySelector(`.sequence-bars[data-id="${sequenceId}"]`);
+
+        activateBtn.addEventListener('click', () => {
+            // Deactivate current active sequence if any
+            if (this.activeSequenceId && this.activeSequenceId !== sequenceId) {
+                const prevSequence = this.sequences.get(this.activeSequenceId);
+                if (prevSequence) {
+                    prevSequence.isRecording = false;
+                }
+                this.updateAllSequenceControls();
+            }
+
+            // Toggle active state for clicked sequence
+            if (this.activeSequenceId === sequenceId) {
+                this.activeSequenceId = null;
+                this.sequences.get(sequenceId).isRecording = false;
+                clearBtn.disabled = true;
+            } else {
+                this.activeSequenceId = sequenceId;
+                this.sequences.get(sequenceId).isRecording = true;
+                clearBtn.disabled = false;
+            }
+
+            this.updateAllSequenceControls();
+        });
+
+        clearBtn.addEventListener('click', () => {
+            const sequence = this.sequences.get(sequenceId);
+            sequence.clear();
+            this.sequenceSignals.delete(sequenceId);
+            this.updateAudioGraph();
+            sequence.isRecording = false;
+            this.activeSequenceId = null;
+            this.updateAllSequenceControls();
+            container.querySelector(`.sequence-elements[data-id="${sequenceId}"]`).innerHTML = '';
+            this.shadowRoot.querySelectorAll('.element').forEach(el => {
+                el.classList.remove(`in-sequence-${sequenceId}`);
+            });
+        });
+
+        removeBtn.addEventListener('click', () => {
+            this.sequences.delete(sequenceId);
+            this.sequenceSignals.delete(sequenceId);
+            container.remove();
+            this.updateAudioGraph();
+        });
+
+        barsSelect.addEventListener('change', (e) => {
+            const sequence = this.sequences.get(sequenceId);
+            sequence.bars = e.target.value;
+            this.updateSequencePlayback(sequenceId);
+        });
+    }
+
+    updateSequenceActiveState(container, sequenceId) {
+        const isActive = this.activeSequenceId === sequenceId;
+        container.classList.toggle('active-sequence', isActive);
+        const activateBtn = container.querySelector(`.activate-sequence[data-id="${sequenceId}"]`);
+        if (activateBtn) {
+            activateBtn.textContent = isActive ? 'Active' : 'Activate';
+            activateBtn.classList.toggle('active', isActive);
+        }
+    }
+
+    updateAllSequenceControls() {
+        this.shadowRoot.querySelectorAll('.sequence-controls').forEach(container => {
+            const sequenceId = container.querySelector('[data-id]').dataset.id;
+            this.updateSequenceActiveState(container, sequenceId);
+        });
+    }
+
+    updateSequenceElementsUI(sequenceId) {
+        const sequence = this.sequences.get(sequenceId);
+        const sequenceElements = this.shadowRoot.querySelector(`.sequence-elements[data-id="${sequenceId}"]`);
+        sequenceElements.innerHTML = '';
+        
+        sequence.elements.forEach((element, index) => {
+            const elementDiv = document.createElement('div');
+            elementDiv.classList.add('sequence-element');
+            elementDiv.innerHTML = `
+                <span>Element ${index + 1}</span>
+                <div class="parameter-sliders">
+                    <div class="parameter-slider">
+                        <label>Sequence Offset</label>
+                        <input type="range" min="0.1" max="2" step="0.1" value="${element.offset}" 
+                               class="offset-slider" data-sequence="${sequenceId}" data-index="${index}">
+                        <span class="parameter-value">${element.offset}x</span>
+                    </div>
+                    <div class="parameter-slider">
+                        <label>Duration Scale</label>
+                        <input type="range" min="0.1" max="10" step="0.1" value="${element.duration}" 
+                               class="duration-slider" data-sequence="${sequenceId}" data-index="${index}">
+                        <span class="parameter-value">${element.duration}x</span>
+                    </div>
+                    <div class="parameter-slider">
+                        <label>Pitch Shift</label>
+                        <input type="range" min="-24" max="24" step="1" value="${element.shift}" 
+                               class="shift-slider" data-sequence="${sequenceId}" data-index="${index}">
+                        <span class="parameter-value">${element.shift} st</span>
+                    </div>
+                    <div class="parameter-slider">
+                        <label>Sample Stretch</label>
+                        <input type="range" min="0.25" max="4" step="0.25" value="${element.stretch}" 
+                               class="stretch-slider" data-sequence="${sequenceId}" data-index="${index}">
+                        <span class="parameter-value">${element.stretch}x</span>
+                    </div>
+                </div>
+                <button class="remove-element" data-sequence="${sequenceId}" data-index="${index}">✕</button>
+            `;
+            
+            const offsetSlider = elementDiv.querySelector('.offset-slider');
+            const shiftSlider = elementDiv.querySelector('.shift-slider');
+            const stretchSlider = elementDiv.querySelector('.stretch-slider');
+            const durationSlider = elementDiv.querySelector('.duration-slider');
+            
+            offsetSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequences.get(sequenceId).setOffset(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value}x`;
+                this.updateSequencePlayback(sequenceId);
+            });
+
+            shiftSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequences.get(sequenceId).setShift(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value} st`;
+                this.updateSequencePlayback(sequenceId);
+            });
+
+            stretchSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequences.get(sequenceId).setStretch(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value}x`;
+                this.updateSequencePlayback(sequenceId);
+            });
+
+            durationSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequences.get(sequenceId).setDuration(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value}x`;
+                this.updateSequencePlayback(sequenceId);
+            });
+
+            elementDiv.querySelector('.remove-element').addEventListener('click', (e) => {
+                const index = parseInt(e.target.dataset.index);
+                const removedSound = this.sequences.get(sequenceId).elements[index].soundUrl;
+                this.sequences.get(sequenceId).removeElement(index);
+                
+                // Find and remove highlight from the corresponding element if it's not used anymore
+                if (!this.sequences.get(sequenceId).elements.some(el => el.soundUrl === removedSound)) {
+                    this.shadowRoot.querySelector(`[data-sound="${removedSound}"]`)?.classList.remove(`in-sequence-${sequenceId}`);
+                }
+                
+                this.updateSequenceElementsUI(sequenceId);
+                this.updateSequencePlayback(sequenceId);
+            });
+            
+            sequenceElements.appendChild(elementDiv);
+        });
+    }
+
     connectedCallback() {
         this.shadowRoot.innerHTML = `
             <style>
@@ -694,6 +913,30 @@ class TestComponent extends HTMLElement {
                     justify-content: space-between;
                     font-size: 0.9em;
                 }
+                .sequence-container {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 20px;
+                }
+                .sequence-header {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .global-controls {
+                    margin: 20px 0;
+                    padding: 15px;
+                    background: #f5f5f5;
+                    border-radius: 8px;
+                }
+                .sequence-controls.active-sequence {
+                    border: 2px solid #4CAF50;
+                    background-color: #f0f7f0;
+                }
+                .activate-sequence.active {
+                    background-color: #4CAF50;
+                    color: white;
+                }
             </style>
             <div class="container">
                 <h1>Elementary Audio Test</h1>
@@ -701,21 +944,20 @@ class TestComponent extends HTMLElement {
                 
                 <div class="control-panel">
                     <div class="control-group">
-                        <h3>Playback Mode</h3>
+                        <h3>Mode</h3>
                         <div class="radio-group">
                             <label>
-                                <input type="radio" name="playback" value="explore one-off" checked>
-                                One-off
+                                <input type="radio" name="mode" value="explore one-off" checked>
+                                Explore One-Off
                             </label>
                             <label>
-                                <input type="radio" name="playback" value="explore looping">
-                                Looping
+                                <input type="radio" name="mode" value="explore looping">
+                                Explore Looping
                             </label>
                         </div>
                     </div>
-
                     <div class="control-group">
-                        <h3>Interaction Mode</h3>
+                        <h3>Interaction</h3>
                         <div class="radio-group">
                             <label>
                                 <input type="radio" name="interaction" value="hover" checked>
@@ -727,12 +969,11 @@ class TestComponent extends HTMLElement {
                             </label>
                         </div>
                     </div>
-
                     <div class="control-group">
                         <h3>Trajectory</h3>
                         <div class="trajectory-controls">
-                            <button id="record-trajectory">Record Trajectory</button>
-                            <button id="stop-trajectory" disabled>Stop Recording</button>
+                            <button id="start-recording">Start Recording</button>
+                            <button id="stop-recording" disabled>Stop Recording</button>
                         </div>
                         <div class="sample-parameters">
                             <div class="sample-parameter">
@@ -763,80 +1004,147 @@ class TestComponent extends HTMLElement {
                     </div>
                 </div>
 
+                <div class="global-controls">
+                    <h3>Global Settings</h3>
+                    <div class="parameter-group">
+                        <label>BPM: <span id="bpm-value">120</span></label>
+                        <input type="range" id="global-bpm" min="10" max="300" value="120">
+                    </div>
+                    <button id="add-sequence">Add Sequence</button>
+                </div>
+                <div class="sequence-container"></div>
+
                 <div id="content">
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCXDE8GYPBGY6579CNEVDESS-4_0_1.wav">Element 1</div>
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCXC5834FMVTRV3C6PZ1MH4E-4_0_1.wav">Element 2</div>
                     <div class="element" data-sound="https://ns9648k.web.sigma2.no/evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCVR4RSQNYCM6PFBZC0TZ0HD_evoConf_singleMap_refSingleEmb_mfcc-sans0-statistics_pca_retrainIncr50_zScoreNSynthTrain_bassSynth/01JCX1R8B6A9QSMPEJ7D1C2WY1-4_0_1.wav">Element 3</div>
                 </div>
                 <div class="trajectories-container"></div>
-                <div class="sequence-controls">
-                    <div class="sequence-buttons">
-                        <button id="record-sequence">Record Sequence</button>
-                        <button id="clear-sequence" disabled>Clear Sequence</button>
-                    </div>
-                    <div class="sequence-parameters">
-                        <div class="parameter-group">
-                            <label>Bars:</label>
-                            <select id="sequence-bars">
-                                <option value="1/4 bar">1/4 bar</option>
-                                <option value="1/2 bar">1/2 bar</option>
-                                <option value="1 bar" selected>1 bar</option>
-                                <option value="2 bars">2 bars</option>
-                                <option value="3 bars">3 bars</option>
-                                <option value="4 bars">4 bars</option>
-                                <option value="8 bars">8 bars</option>
-                            </select>
-                        </div>
-                        <div class="parameter-group">
-                            <label>BPM: <span id="bpm-value">120</span></label>
-                            <input type="range" id="sequence-bpm" min="10" max="300" value="120">
-                        </div>
-                    </div>
-                    <div class="sequence-elements"></div>
-                </div>
             </div>
         `;
 
-        const initButton = this.shadowRoot.querySelector('#init-audio');
-        initButton.addEventListener('click', async () => {
-            if (await this.initializeAudio()) {
-                initButton.disabled = true;
-                initButton.textContent = 'Audio Ready';
+        const initAudioButton = this.shadowRoot.querySelector('#init-audio');
+        initAudioButton.addEventListener('click', async () => {
+            const success = await this.initializeAudio();
+            if (success) {
+                initAudioButton.disabled = true;
             }
         });
 
-        // Mode selection handlers
-        this.shadowRoot.querySelectorAll('input[name="playback"]').forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                this.setMode(e.target.value);
+        const modeButtons = this.shadowRoot.querySelectorAll('input[name="mode"]');
+        modeButtons.forEach(button => {
+            button.addEventListener('change', (e) => {
+                this.mode = e.target.value;
+                this.updateAudioGraph();
             });
         });
 
-        // Interaction mode selection handlers
-        this.shadowRoot.querySelectorAll('input[name="interaction"]').forEach(radio => {
-            radio.addEventListener('change', (e) => {
+        const interactionButtons = this.shadowRoot.querySelectorAll('input[name="interaction"]');
+        interactionButtons.forEach(button => {
+            button.addEventListener('change', (e) => {
                 this.interactionMode = e.target.value;
             });
         });
 
-        // Trajectory control handlers
-        const recordButton = this.shadowRoot.querySelector('#record-trajectory');
-        const stopButton = this.shadowRoot.querySelector('#stop-trajectory');
+        const startRecordingButton = this.shadowRoot.querySelector('#start-recording');
+        const stopRecordingButton = this.shadowRoot.querySelector('#stop-recording');
 
-        recordButton.addEventListener('click', () => {
+        startRecordingButton.addEventListener('click', () => {
             this.startTrajectoryRecording();
-            recordButton.disabled = true;
-            stopButton.disabled = false;
+            startRecordingButton.disabled = true;
+            stopRecordingButton.disabled = false;
             this.shadowRoot.querySelectorAll('.element').forEach(el => 
                 el.classList.add('recording'));
         });
 
-        stopButton.addEventListener('click', () => {
+        stopRecordingButton.addEventListener('click', () => {
             this.stopTrajectoryRecording();
-            recordButton.disabled = false;
-            stopButton.disabled = true;
-            this.shadowRoot.querySelectorAll('.element').forEach(el => 
-                el.classList.remove('recording'));
+            startRecordingButton.disabled = false;
+            stopRecordingButton.disabled = true;
+        });
+
+        this.shadowRoot.querySelectorAll('.element').forEach(element => {
+            element.addEventListener(this.interactionMode === 'hover' ? 'mouseenter' : 'click', async () => {
+                if (this.mode === 'explore looping') {
+                    await this.toggleLoopingSound(element);
+                } else if (this.mode === 'explore one-off') {
+                    await this.playOneOffSound(element);
+                }
+
+                if (this.isRecording) {
+                    this.recordEvent(element);
+                }
+            });
+        });
+
+        // Add global BPM control
+        const globalBpmSlider = this.shadowRoot.querySelector('#global-bpm');
+        const bpmValue = this.shadowRoot.querySelector('#bpm-value');
+
+        globalBpmSlider.addEventListener('input', (e) => {
+            this.globalBpm = parseInt(e.target.value);
+            bpmValue.textContent = this.globalBpm;
+            // Update all sequences
+            this.sequences.forEach((sequence, id) => {
+                sequence.bpm = this.globalBpm;
+                this.updateSequencePlayback(id);
+            });
+        });
+
+        // Add sequence button handler
+        this.shadowRoot.querySelector('#add-sequence').addEventListener('click', () => {
+            const sequenceId = Date.now();
+            const sequence = new Sequence();
+            sequence.bpm = this.globalBpm;
+            this.sequences.set(sequenceId, sequence);
+
+            const container = this.shadowRoot.querySelector('.sequence-container');
+            container.appendChild(this.createSequenceControls(sequenceId));
+        });
+
+        // Modify existing element click handler
+        this.shadowRoot.querySelectorAll('.element').forEach(element => {
+            const originalClickHandler = element.onclick;
+            element.onclick = async (event) => {
+                if (!this.initialized) return;
+
+                // Only record to active sequence
+                if (this.activeSequenceId) {
+                    const sequence = this.sequences.get(this.activeSequenceId);
+                    if (sequence && sequence.isRecording) {
+                        const soundUrl = element.getAttribute('data-sound');
+                        
+                        if (!this.uploadedSamples.has(soundUrl)) {
+                            try {
+                                const res = await fetch(soundUrl);
+                                const sampleBuffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
+                                
+                                await this.core.updateVirtualFileSystem({
+                                    [soundUrl]: [sampleBuffer.getChannelData(0)]
+                                });
+                                
+                                this.uploadedSamples.add(soundUrl);
+                                this.sampleDurations.set(soundUrl, sampleBuffer.duration);
+                            } catch (error) {
+                                console.error('Failed to load sample:', error);
+                                return;
+                            }
+                        }
+
+                        sequence.addElement(soundUrl);
+                        element.classList.add(`in-sequence-${this.activeSequenceId}`);
+                        
+                        this.updateSequenceElementsUI(this.activeSequenceId);
+                        this.updateSequencePlayback(this.activeSequenceId);
+                        return;
+                    }
+                }
+
+                // Handle original click behavior if no sequence is recording
+                if (originalClickHandler) {
+                    originalClickHandler(event);
+                }
+            };
         });
 
         // Add sample parameter control handlers
@@ -866,7 +1174,6 @@ class TestComponent extends HTMLElement {
             this.shadowRoot.querySelector('#start-offset-value').textContent = 
                 this.sampleParams.startOffset;
             
-            // Recreate all active looping voices with new parameters
             if (this.loopingVoices.size > 0) {
                 const activeLoops = Array.from(this.loopingVoices.keys());
                 activeLoops.forEach(soundUrl => {
@@ -883,7 +1190,6 @@ class TestComponent extends HTMLElement {
             this.shadowRoot.querySelector('#end-offset-value').textContent = 
                 this.sampleParams.endOffset;
             
-            // Recreate all active looping voices with new parameters
             if (this.loopingVoices.size > 0) {
                 const activeLoops = Array.from(this.loopingVoices.keys());
                 activeLoops.forEach(soundUrl => {
@@ -895,217 +1201,19 @@ class TestComponent extends HTMLElement {
             }
         });
 
-        // Add sequence control event listeners
-        const recordSequenceBtn = this.shadowRoot.querySelector('#record-sequence');
-        const clearSequenceBtn = this.shadowRoot.querySelector('#clear-sequence');
-        const barsSelect = this.shadowRoot.querySelector('#sequence-bars');
-        const bpmSlider = this.shadowRoot.querySelector('#sequence-bpm');
-        const bpmValue = this.shadowRoot.querySelector('#bpm-value');
-
-        recordSequenceBtn.addEventListener('click', () => {
-            this.sequence.isRecording = true;
-            recordSequenceBtn.disabled = true;
-            clearSequenceBtn.disabled = false;
-        });
-
-        clearSequenceBtn.addEventListener('click', () => {
-            this.sequence.clear();
-            this.sequenceSignal = null;
-            this.updateAudioGraph();
-            this.sequence.isRecording = false;
-            recordSequenceBtn.disabled = false;
-            clearSequenceBtn.disabled = true;
-            this.shadowRoot.querySelector('.sequence-elements').innerHTML = '';
-            this.shadowRoot.querySelectorAll('.element').forEach(el => {
-                el.classList.remove('in-sequence');
-            });
-        });
-
-        barsSelect.addEventListener('change', (e) => {
-            this.sequence.bars = e.target.value;
-            this.updateSequencePlayback();
-        });
-
-        bpmSlider.addEventListener('input', (e) => {
-            this.sequence.bpm = parseInt(e.target.value);
-            bpmValue.textContent = this.sequence.bpm;
-            this.updateSequencePlayback();
-        });
-
-        // Sound element event handlers
-        this.shadowRoot.querySelectorAll('.element').forEach(element => {
-            // Handler for hover interactions
-            element.addEventListener('mouseenter', () => {
-                if (!this.initialized) return;
-
-                if (this.interactionMode === 'hover' && !this.isPlayingTrajectory) {
-                    if (this.isRecording) {
-                        this.recordEvent(element);
-                    }
-                    if (this.mode === 'explore one-off') {
-                        this.playOneOffSound(element);
-                    } else if (this.mode === 'explore looping') {
-                        this.toggleLoopingSound(element);
-                    }
-                }
-            });
-
-            // Handler for click interactions
-            element.addEventListener('click', () => {
-                if (!this.initialized) return;
-
-                if (this.interactionMode === 'click' && !this.isPlayingTrajectory) {
-                    if (this.isRecording) {
-                        this.recordEvent(element);
-                    }
-                    if (this.mode === 'explore one-off') {
-                        this.playOneOffSound(element);
-                    } else if (this.mode === 'explore looping') {
-                        this.toggleLoopingSound(element);
-                    }
-                }
-            });
-
-            const originalClickHandler = element.onclick;
-            element.onclick = async (event) => {
-                if (!this.initialized) return;
-
-                if (this.sequence.isRecording) {
-                    const soundUrl = element.getAttribute('data-sound');
-                    
-                    // Ensure sample is loaded into virtual file system
-                    if (!this.uploadedSamples.has(soundUrl)) {
-                        try {
-                            const res = await fetch(soundUrl);
-                            const sampleBuffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
-                            
-                            await this.core.updateVirtualFileSystem({
-                                [soundUrl]: [sampleBuffer.getChannelData(0)]
-                            });
-                            
-                            this.uploadedSamples.add(soundUrl);
-                            this.sampleDurations.set(soundUrl, sampleBuffer.duration);
-                        } catch (error) {
-                            console.error('Failed to load sample:', error);
-                            return;
-                        }
-                    }
-
-                    this.sequence.addElement(soundUrl);
-                    element.classList.add('in-sequence');
-                    
-                    this.updateSequenceElementsUI();
-
-                    try {
-                        this.updateSequencePlayback();
-                    } catch (error) {
-                        console.error('Failed to update sequence playback:', error);
-                    }
-                } else if (originalClickHandler) {
-                    originalClickHandler(event);
-                }
-            };
-        });
-    }
-
-    updateSequenceElementsUI() {
-        const sequenceElements = this.shadowRoot.querySelector('.sequence-elements');
-        sequenceElements.innerHTML = '';
-        
-        this.sequence.elements.forEach((element, index) => {
-            const elementDiv = document.createElement('div');
-            elementDiv.classList.add('sequence-element');
-            elementDiv.innerHTML = `
-                <span>Element ${index + 1}</span>
-                <div class="parameter-sliders">
-                    <div class="parameter-slider">
-                        <label>Sequence Offset</label>
-                        <input type="range" min="0.1" max="2" step="0.1" value="${element.offset}" 
-                               class="offset-slider" data-index="${index}">
-                        <span class="parameter-value">${element.offset}x</span>
-                    </div>
-                    <div class="parameter-slider">
-                        <label>Duration Scale</label>
-                        <input type="range" min="0.1" max="10" step="0.1" value="${element.duration}" 
-                               class="duration-slider" data-index="${index}">
-                        <span class="parameter-value">${element.duration}x</span>
-                    </div>
-                    <div class="parameter-slider">
-                        <label>Pitch Shift</label>
-                        <input type="range" min="-24" max="24" step="1" value="${element.shift}" 
-                               class="shift-slider" data-index="${index}">
-                        <span class="parameter-value">${element.shift} st</span>
-                    </div>
-                    <div class="parameter-slider">
-                        <label>Sample Stretch</label>
-                        <input type="range" min="0.25" max="4" step="0.25" value="${element.stretch}" 
-                               class="stretch-slider" data-index="${index}">
-                        <span class="parameter-value">${element.stretch}x</span>
-                    </div>
-                </div>
-                <button class="remove-element" data-index="${index}">✕</button>
-            `;
-            
-            const offsetSlider = elementDiv.querySelector('.offset-slider');
-            const shiftSlider = elementDiv.querySelector('.shift-slider');
-            const stretchSlider = elementDiv.querySelector('.stretch-slider');
-            const durationSlider = elementDiv.querySelector('.duration-slider');
-            
-            offsetSlider.addEventListener('input', (e) => {
-                const value = parseFloat(e.target.value);
-                this.sequence.setOffset(parseInt(e.target.dataset.index), value);
-                e.target.nextElementSibling.textContent = `${value}x`;
-                this.updateSequencePlayback();
-            });
-
-            shiftSlider.addEventListener('input', (e) => {
-                const value = parseFloat(e.target.value);
-                this.sequence.setShift(parseInt(e.target.dataset.index), value);
-                e.target.nextElementSibling.textContent = `${value} st`;
-                this.updateSequencePlayback();
-            });
-
-            stretchSlider.addEventListener('input', (e) => {
-                const value = parseFloat(e.target.value);
-                this.sequence.setStretch(parseInt(e.target.dataset.index), value);
-                e.target.nextElementSibling.textContent = `${value}x`;
-                this.updateSequencePlayback();
-            });
-
-            durationSlider.addEventListener('input', (e) => {
-                const value = parseFloat(e.target.value);
-                this.sequence.setDuration(parseInt(e.target.dataset.index), value);
-                e.target.nextElementSibling.textContent = `${value}x`;
-                this.updateSequencePlayback();
-            });
-
-            elementDiv.querySelector('.remove-element').addEventListener('click', (e) => {
-                const index = parseInt(e.target.dataset.index);
-                const removedSound = this.sequence.elements[index].soundUrl;
-                this.sequence.removeElement(index);
-                
-                // Find and remove highlight from the corresponding element if it's not used anymore
-                if (!this.sequence.elements.some(el => el.soundUrl === removedSound)) {
-                    this.shadowRoot.querySelector(`[data-sound="${removedSound}"]`)?.classList.remove('in-sequence');
-                }
-                
-                this.updateSequenceElementsUI();
-                this.updateSequencePlayback();
-            });
-            
-            sequenceElements.appendChild(elementDiv);
-        });
-    }
-
-    setMode(mode) {
-        // Clear all looping voices when changing modes
-        this.loopingVoices.clear();
-        this.shadowRoot.querySelectorAll('.element').forEach(el => {
-            el.classList.remove('looping');
-        });
-        this.updateAudioGraph();
-
-        this.mode = mode;
+        // Add styles for active sequence
+        const style = document.createElement('style');
+        style.textContent = `
+            .sequence-controls.active-sequence {
+                border: 2px solid #4CAF50;
+                background-color: #f0f7f0;
+            }
+            .activate-sequence.active {
+                background-color: #4CAF50;
+                color: white;
+            }
+        `;
+        this.shadowRoot.appendChild(style);
     }
 }
 
