@@ -15,7 +15,8 @@ class Sequence {
             soundUrl,
             offset: 1,
             shift: 0,
-            stretch: 1
+            stretch: 1,
+            duration: 1
         });
     }
 
@@ -38,6 +39,12 @@ class Sequence {
     setOffset(index, offset) {
         if (index >= 0 && index < this.elements.length) {
             this.elements[index].offset = offset;
+        }
+    }
+
+    setDuration(index, duration) {
+        if (index >= 0 && index < this.elements.length) {
+            this.elements[index].duration = duration;
         }
     }
 
@@ -186,13 +193,11 @@ class TestComponent extends HTMLElement {
                     console.warn('Sample not loaded:', element.soundUrl);
                     return null;
                 }
-console.log('times', times);
+
                 const sampleDuration = this.sampleDurations.get(element.soundUrl);
                 const startTime = times[index] * sequenceDuration;
                 const endTime = Math.max(startTime + sampleDuration, sequenceDuration);
-console.log('startTime', startTime, 'endTime', endTime);
-console.log('sampleDuration', sampleDuration);
-console.log('sequenceDuration', sequenceDuration);
+
                 const time = el.mod(
                   el.div(el.time(), el.sr()),
                   sequenceDuration
@@ -201,7 +206,7 @@ console.log('sequenceDuration', sequenceDuration);
                 try {
                   return el.sampleseq2({
                       path: element.soundUrl,
-                      duration: sampleDuration,
+                      duration: sampleDuration * element.duration,
                       seq: [
                           { time: startTime, value: 1 },
                           { time: endTime, value: 0 }
@@ -912,6 +917,12 @@ console.log('sequenceDuration', sequenceDuration);
                         <span class="parameter-value">${element.offset}x</span>
                     </div>
                     <div class="parameter-slider">
+                        <label>Duration Scale</label>
+                        <input type="range" min="0.1" max="10" step="0.1" value="${element.duration}" 
+                               class="duration-slider" data-index="${index}">
+                        <span class="parameter-value">${element.duration}x</span>
+                    </div>
+                    <div class="parameter-slider">
                         <label>Pitch Shift</label>
                         <input type="range" min="-24" max="24" step="1" value="${element.shift}" 
                                class="shift-slider" data-index="${index}">
@@ -930,6 +941,7 @@ console.log('sequenceDuration', sequenceDuration);
             const offsetSlider = elementDiv.querySelector('.offset-slider');
             const shiftSlider = elementDiv.querySelector('.shift-slider');
             const stretchSlider = elementDiv.querySelector('.stretch-slider');
+            const durationSlider = elementDiv.querySelector('.duration-slider');
             
             offsetSlider.addEventListener('input', (e) => {
                 const value = parseFloat(e.target.value);
@@ -948,6 +960,13 @@ console.log('sequenceDuration', sequenceDuration);
             stretchSlider.addEventListener('input', (e) => {
                 const value = parseFloat(e.target.value);
                 this.sequence.setStretch(parseInt(e.target.dataset.index), value);
+                e.target.nextElementSibling.textContent = `${value}x`;
+                this.updateSequencePlayback();
+            });
+
+            durationSlider.addEventListener('input', (e) => {
+                const value = parseFloat(e.target.value);
+                this.sequence.setDuration(parseInt(e.target.dataset.index), value);
                 e.target.nextElementSibling.textContent = `${value}x`;
                 this.updateSequencePlayback();
             });
