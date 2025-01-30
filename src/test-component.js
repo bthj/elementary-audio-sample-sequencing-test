@@ -906,19 +906,19 @@ console.log('sequenceDuration', sequenceDuration);
                 <span>Element ${index + 1}</span>
                 <div class="parameter-sliders">
                     <div class="parameter-slider">
-                        <label>Offset</label>
+                        <label>Sequence Offset</label>
                         <input type="range" min="0.1" max="2" step="0.1" value="${element.offset}" 
                                class="offset-slider" data-index="${index}">
                         <span class="parameter-value">${element.offset}x</span>
                     </div>
                     <div class="parameter-slider">
-                        <label>Shift</label>
-                        <input type="range" min="-12" max="12" step="1" value="${element.shift}" 
+                        <label>Pitch Shift</label>
+                        <input type="range" min="-24" max="24" step="1" value="${element.shift}" 
                                class="shift-slider" data-index="${index}">
                         <span class="parameter-value">${element.shift} st</span>
                     </div>
                     <div class="parameter-slider">
-                        <label>Stretch</label>
+                        <label>Sample Stretch</label>
                         <input type="range" min="0.25" max="4" step="0.25" value="${element.stretch}" 
                                class="stretch-slider" data-index="${index}">
                         <span class="parameter-value">${element.stretch}x</span>
