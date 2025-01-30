@@ -119,6 +119,13 @@ class TestComponent extends HTMLElement {
         // Add sequence state
         this.sequence = new Sequence();
         this.sequenceSignal = null;
+
+        // Add sample playback parameters
+        this.sampleParams = {
+            startOffset: 0,
+            endOffset: 0,
+            playbackRate: 1
+        };
     }
 
     async initializeAudio() {
@@ -149,12 +156,12 @@ class TestComponent extends HTMLElement {
         return el.mul(
             el.mc.sample(
                 {
-                  channels: 1,
-                  path: soundUrl, 
-                  mode: 'trigger',
-                  playbackRate: 1,
-                  startOffset: 0,
-                  endOffset: 0
+                    channels: 1,
+                    path: soundUrl, 
+                    mode: 'trigger',
+                    playbackRate: this.sampleParams.playbackRate,
+                    startOffset: this.sampleParams.startOffset,
+                    endOffset: this.sampleParams.endOffset
                 },
                 el.const({ key: `${voiceKey}-trigger`, value: 1 }),
                 1
@@ -170,14 +177,17 @@ class TestComponent extends HTMLElement {
             duration
         );
 
-        // Create a looping sequence with the sample
+        // Create a looping sequence with the sample, now using sample parameters
         return el.mul(
-            el.sampleseq2({
+            el.mc.sample({
+                channels: 1,
                 path: soundUrl,
-                duration: duration,
-                seq: [{ time: 0, value: 1 }]
-            }, time),
-            el.const({ value: 1 / this.maxVoices }) // Dynamic gain scaling
+                mode: 'loop',
+                playbackRate: this.sampleParams.playbackRate,
+                startOffset: this.sampleParams.startOffset,
+                endOffset: this.sampleParams.endOffset
+            }, el.const({ value: 1 }), el.const({ value: 1 }))[0],
+            el.const({ value: 1 / this.maxVoices })
         );
     }
 
@@ -485,9 +495,9 @@ class TestComponent extends HTMLElement {
                     key: `player-${trajectoryId}-${index}`,
                     path: event.soundUrl,
                     mode: 'trigger',
-                    playbackRate: 1,
-                    startOffset: 0,
-                    endOffset: 0
+                    playbackRate: this.sampleParams.playbackRate,
+                    startOffset: this.sampleParams.startOffset,
+                    endOffset: this.sampleParams.endOffset
                 }, trigger, el.const({key: `rate-${trajectoryId}-${index}`, value: 1}))[0];
             });
         
@@ -668,6 +678,22 @@ class TestComponent extends HTMLElement {
                     font-size: 0.8em;
                     color: #666;
                 }
+                .sample-parameters {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                    margin-top: 10px;
+                }
+                .sample-parameter {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 5px;
+                }
+                .parameter-label {
+                    display: flex;
+                    justify-content: space-between;
+                    font-size: 0.9em;
+                }
             </style>
             <div class="container">
                 <h1>Elementary Audio Test</h1>
@@ -707,6 +733,32 @@ class TestComponent extends HTMLElement {
                         <div class="trajectory-controls">
                             <button id="record-trajectory">Record Trajectory</button>
                             <button id="stop-trajectory" disabled>Stop Recording</button>
+                        </div>
+                        <div class="sample-parameters">
+                            <div class="sample-parameter">
+                                <div class="parameter-label">
+                                    <span>Playback Rate</span>
+                                    <span id="playback-rate-value">1.0</span>
+                                </div>
+                                <input type="range" id="playback-rate" 
+                                    min="0.25" max="4" step="0.25" value="1">
+                            </div>
+                            <div class="sample-parameter">
+                                <div class="parameter-label">
+                                    <span>Start Offset</span>
+                                    <span id="start-offset-value">0</span>
+                                </div>
+                                <input type="range" id="start-offset" 
+                                    min="0" max="44100" step="441" value="0">
+                            </div>
+                            <div class="sample-parameter">
+                                <div class="parameter-label">
+                                    <span>End Offset</span>
+                                    <span id="end-offset-value">0</span>
+                                </div>
+                                <input type="range" id="end-offset" 
+                                    min="0" max="44100" step="441" value="0">
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -785,6 +837,62 @@ class TestComponent extends HTMLElement {
             stopButton.disabled = true;
             this.shadowRoot.querySelectorAll('.element').forEach(el => 
                 el.classList.remove('recording'));
+        });
+
+        // Add sample parameter control handlers
+        const playbackRateSlider = this.shadowRoot.querySelector('#playback-rate');
+        const startOffsetSlider = this.shadowRoot.querySelector('#start-offset');
+        const endOffsetSlider = this.shadowRoot.querySelector('#end-offset');
+
+        playbackRateSlider.addEventListener('input', (e) => {
+            this.sampleParams.playbackRate = parseFloat(e.target.value);
+            this.shadowRoot.querySelector('#playback-rate-value').textContent = 
+                this.sampleParams.playbackRate.toFixed(2);
+            
+            // Recreate all active looping voices with new parameters
+            if (this.loopingVoices.size > 0) {
+                const activeLoops = Array.from(this.loopingVoices.keys());
+                activeLoops.forEach(soundUrl => {
+                    const duration = this.sampleDurations.get(soundUrl);
+                    const loopingVoice = this.createLoopingVoice(soundUrl, duration);
+                    this.loopingVoices.set(soundUrl, loopingVoice);
+                });
+                this.updateAudioGraph();
+            }
+        });
+
+        startOffsetSlider.addEventListener('input', (e) => {
+            this.sampleParams.startOffset = parseInt(e.target.value);
+            this.shadowRoot.querySelector('#start-offset-value').textContent = 
+                this.sampleParams.startOffset;
+            
+            // Recreate all active looping voices with new parameters
+            if (this.loopingVoices.size > 0) {
+                const activeLoops = Array.from(this.loopingVoices.keys());
+                activeLoops.forEach(soundUrl => {
+                    const duration = this.sampleDurations.get(soundUrl);
+                    const loopingVoice = this.createLoopingVoice(soundUrl, duration);
+                    this.loopingVoices.set(soundUrl, loopingVoice);
+                });
+                this.updateAudioGraph();
+            }
+        });
+
+        endOffsetSlider.addEventListener('input', (e) => {
+            this.sampleParams.endOffset = parseInt(e.target.value);
+            this.shadowRoot.querySelector('#end-offset-value').textContent = 
+                this.sampleParams.endOffset;
+            
+            // Recreate all active looping voices with new parameters
+            if (this.loopingVoices.size > 0) {
+                const activeLoops = Array.from(this.loopingVoices.keys());
+                activeLoops.forEach(soundUrl => {
+                    const duration = this.sampleDurations.get(soundUrl);
+                    const loopingVoice = this.createLoopingVoice(soundUrl, duration);
+                    this.loopingVoices.set(soundUrl, loopingVoice);
+                });
+                this.updateAudioGraph();
+            }
         });
 
         // Add sequence control event listeners
