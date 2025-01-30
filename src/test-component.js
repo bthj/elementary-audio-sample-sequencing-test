@@ -8,6 +8,9 @@ class Sequence {
         this.bpm = 120;
         this.bars = "1 bar";
         this.isRecording = false;
+        this.volume = 1;
+        this.isMuted = false;
+        this.isSolo = false;
     }
 
     addElement(soundUrl) {
@@ -133,6 +136,7 @@ class TestComponent extends HTMLElement {
         };
 
         this.activeSequenceId = null; // Add tracking for active sequence
+        this.soloSequences = new Set(); // Track which sequences are soloed
     }
 
     async initializeAudio() {
@@ -201,6 +205,11 @@ class TestComponent extends HTMLElement {
     createSequenceVoices(sequence) {
         if (sequence.elements.length === 0) return null;
 
+        // Check if sequence should be silent due to mute/solo status
+        const anySolo = this.soloSequences.size > 0;
+        const isSilent = sequence.isMuted || (anySolo && !sequence.isSolo);
+        if (isSilent) return el.const({value: 0});
+
         const sequenceDuration = sequence.getDurationInSeconds();
         const times = sequence.getElementTimes();
         try {
@@ -244,8 +253,8 @@ class TestComponent extends HTMLElement {
 
             // Sum all voices and apply gain
             return voices.length === 1 ? 
-                el.mul(voices[0], el.const({value: 1 / this.maxVoices})) :
-                el.mul(el.add(...voices), el.const({value: 1 / this.maxVoices}));
+                el.mul(voices[0], el.const({value: sequence.volume / this.maxVoices})) :
+                el.mul(el.add(...voices), el.const({value: sequence.volume / this.maxVoices}));
         } catch (error) {
             console.error('Error in createSequenceVoices:', error);
             return null;
@@ -555,6 +564,17 @@ class TestComponent extends HTMLElement {
                     <button class="remove-sequence" data-id="${sequenceId}">Remove</button>
                 </div>
             </div>
+            <div class="sequence-controls-row">
+                <div class="sequence-volume">
+                    <input type="range" class="volume-slider" 
+                           data-id="${sequenceId}" min="0" max="1" step="0.01" value="1">
+                    <span class="volume-value">100%</span>
+                </div>
+                <div class="sequence-buttons">
+                    <button class="mute-sequence" data-id="${sequenceId}">Mute</button>
+                    <button class="solo-sequence" data-id="${sequenceId}">Solo</button>
+                </div>
+            </div>
             <div class="sequence-parameters">
                 <div class="parameter-group">
                     <label>Bars:</label>
@@ -571,6 +591,33 @@ class TestComponent extends HTMLElement {
             </div>
             <div class="sequence-elements" data-id="${sequenceId}"></div>
         `;
+
+        // Add styles specific to the new controls
+        const style = document.createElement('style');
+        style.textContent = `
+            .sequence-controls-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 10px;
+            }
+            .sequence-volume {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .volume-slider {
+                width: 100px;
+            }
+            .mute-sequence.active, .solo-sequence.active {
+                background-color: #ff4444;
+                color: white;
+            }
+            .solo-sequence.active {
+                background-color: #ffaa00;
+            }
+        `;
+        container.appendChild(style);
 
         this.setupSequenceControlHandlers(container, sequenceId);
         this.updateSequenceActiveState(container, sequenceId);
@@ -632,6 +679,42 @@ class TestComponent extends HTMLElement {
             const sequence = this.sequences.get(sequenceId);
             sequence.bars = e.target.value;
             this.updateSequencePlayback(sequenceId);
+        });
+
+        const volumeSlider = container.querySelector(`.volume-slider[data-id="${sequenceId}"]`);
+        const volumeValue = container.querySelector('.volume-value');
+        const muteBtn = container.querySelector(`.mute-sequence[data-id="${sequenceId}"]`);
+        const soloBtn = container.querySelector(`.solo-sequence[data-id="${sequenceId}"]`);
+
+        volumeSlider.addEventListener('input', (e) => {
+            const volume = parseFloat(e.target.value);
+            const sequence = this.sequences.get(sequenceId);
+            sequence.volume = volume;
+            volumeValue.textContent = `${Math.round(volume * 100)}%`;
+            this.updateSequencePlayback(sequenceId);
+        });
+
+        muteBtn.addEventListener('click', () => {
+            const sequence = this.sequences.get(sequenceId);
+            sequence.isMuted = !sequence.isMuted;
+            muteBtn.classList.toggle('active', sequence.isMuted);
+            this.updateSequencePlayback(sequenceId);
+        });
+
+        soloBtn.addEventListener('click', () => {
+            const sequence = this.sequences.get(sequenceId);
+            sequence.isSolo = !sequence.isSolo;
+            
+            if (sequence.isSolo) {
+                this.soloSequences.add(sequenceId);
+            } else {
+                this.soloSequences.delete(sequenceId);
+            }
+            
+            soloBtn.classList.toggle('active', sequence.isSolo);
+            
+            // Update all sequences since solo affects them all
+            this.sequences.forEach((_, id) => this.updateSequencePlayback(id));
         });
     }
 
@@ -939,7 +1022,7 @@ class TestComponent extends HTMLElement {
                 }
             </style>
             <div class="container">
-                <h1>Elementary Audio Test</h1>
+                <h1><a href="https://www.elementary.audio">Elementary.audio</a> sample sequencing test</h1>
                 <button id="init-audio">Initialize Audio</button>
                 
                 <div class="control-panel">
